@@ -1,0 +1,42 @@
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Env files
+**/.env
+core_backend_system/.env
+
+# Logs
+logs/
+*.log
+forever-debug.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python virtualenvs
+.venv/
+venv/
+
+# Docker
+*.tgz
+docker-compose.override.yml
+**/Dockerfile*
+
+# IDEs
+.vscode/
+.idea/
+
+# Build artifacts
+dist/
+build/
+
+# Database
+core-backend_db_data/
+db_data/
+
+# Misc
+.pytest_cache/
+__pycache__/

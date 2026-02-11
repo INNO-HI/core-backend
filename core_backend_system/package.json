@@ -1,0 +1,14 @@
+{
+  "name": "core_backend_system",
+  "version": "1.0.0",
+  "description": "Core backend system for safe-hi",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "dotenv": "^16.3.1",
+    "mysql2": "^3.3.0"
+  }
+}
