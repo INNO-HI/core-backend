@@ -41,6 +41,13 @@ def create_app() -> Flask:
 
 if __name__ == "__main__":
     import os
+    try:
+        from dotenv import load_dotenv
+        # Load .env from parent directory (core_backend_system/.env)
+        dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
+        load_dotenv(dotenv_path)
+    except ImportError:
+        pass
 
     host = os.environ.get("AI_HOST", "0.0.0.0")
     port = int(os.environ.get("AI_PORT", "5000"))

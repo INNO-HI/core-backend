@@ -1,20 +1,30 @@
 version: '3.8'
 services:
-  db:
-    image: mysql:8.0
+  postgres:
+    image: postgres:16-alpine
     environment:
-      MYSQL_ROOT_PASSWORD: example
-      MYSQL_DATABASE: safe_hi
+      POSTGRES_USER: safehi
+      POSTGRES_PASSWORD: safehi_password
+      POSTGRES_DB: safehi_dashboard
     ports:
-      - "3306:3306"
+      - "5432:5432"
     volumes:
-      - db_data:/var/lib/mysql
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U safehi -d safehi_dashboard"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   ai_dummy:
     build:
       context: ./core_backend_system/ai_dummy_server
     ports:
       - "5000:5000"
+    env_file:
+      - ./core_backend_system/.env
+    environment:
+      - AI_HOST=0.0.0.0
     restart: unless-stopped
 
   core:
@@ -25,10 +35,18 @@ services:
       - "4100:4100"
     env_file:
       - ./core_backend_system/.env
+    environment:
+      - DATABASE_URL=postgresql://safehi:safehi_password@postgres:5432/safehi_dashboard?schema=public
+      - AI_HOST=ai_dummy
     depends_on:
-      - db
-      - ai_dummy
-    restart: unless-stopped
+      postgres:
+        condition: service_healthy
+      ai_dummy:
+        condition: service_started
+    command: >
+      sh -c "npx prisma migrate deploy && 
+             node scripts/init-docker.js && 
+             node server.js"
 
 volumes:
-  db_data:
+  pg_data:

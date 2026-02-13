@@ -1,0 +1,296 @@
+// ============================================================
+// SafeHi Dashboard – Prisma Schema
+// PostgreSQL + Prisma ORM
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// 사용자 / 인증
+// ============================================================
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  password      String
+  name          String
+  phone         String?
+  role          String   @default("user") // user | manager | admin
+  emailVerified Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  feedbacks Feedback[]
+  memos     Memo[]
+
+  @@map("users")
+}
+
+// ============================================================
+// 돌봄 센터
+// ============================================================
+
+model Center {
+  id   String @id @default(cuid())
+  name String @unique
+
+  managers   Manager[]
+  careLogs   CareLog[]
+
+  @@map("centers")
+}
+
+// ============================================================
+// 동 (행정 구역)
+// ============================================================
+
+model Dong {
+  id   String @id @default(cuid())
+  name String @unique
+
+  managerDongs  ManagerDong[]
+  recipients    Recipient[]
+
+  @@map("dongs")
+}
+
+// ============================================================
+// 매니저 (돌봄 관리사)
+// ============================================================
+
+model Manager {
+  id            String   @id @default(cuid())
+  name          String
+  gender        String   // male | female
+  phone         String?
+  email         String?
+  status        String   @default("active") // active | leave | retired
+  startDate     DateTime?
+  centerId      String
+  center        Center   @relation(fields: [centerId], references: [id])
+
+  recipientCount Int @default(0)
+  monthlyVisits  Int @default(0)
+
+  assignedDongs ManagerDong[]
+  recipients    Recipient[]
+  careLogs      CareLog[]
+  visits        Visit[]
+
+  @@map("managers")
+}
+
+model ManagerDong {
+  managerId String
+  dongId    String
+  manager   Manager @relation(fields: [managerId], references: [id])
+  dong      Dong    @relation(fields: [dongId], references: [id])
+
+  @@id([managerId, dongId])
+  @@map("manager_dongs")
+}
+
+// ============================================================
+// 대상자 (어르신)
+// ============================================================
+
+model Recipient {
+  id            String   @id @default(cuid())
+  name          String
+  age           Int
+  gender        String          // male | female
+  status        String   @default("normal") // normal | caution | urgent | unvisited
+  address       String?
+  dongId        String?
+  dong          Dong?    @relation(fields: [dongId], references: [id])
+  phone         String?
+  careStartDate DateTime?
+
+  managerId     String?
+  manager       Manager? @relation(fields: [managerId], references: [id])
+
+  healthInfo       Json? // { diseases, medications, notes }
+  emergencyContact Json? // { name, relationship, phone }
+
+  visitCount    Int      @default(0)
+  lastVisitDate DateTime?
+
+  careLogs   CareLog[]
+  visits     Visit[]
+  memos      Memo[]
+  policyRecommendations RecipientPolicy[]
+
+  @@map("recipients")
+}
+
+// ============================================================
+// 돌봄 일지 (Care Log)
+// ============================================================
+
+model CareLog {
+  id            String   @id @default(cuid())
+  status        String   @default("pending") // pending | urgent | approved | rejected
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  recipientId   String
+  recipient     Recipient @relation(fields: [recipientId], references: [id])
+
+  managerId     String
+  manager       Manager  @relation(fields: [managerId], references: [id])
+
+  centerId      String?
+  center        Center?  @relation(fields: [centerId], references: [id])
+
+  visitDate     DateTime
+  visitType     String?  @default("visit") // visit | call
+  visitLocation String?
+
+  careContent       Json? // { healthStatus, mealStatus, emotionalStatus, livingEnvironment }
+  careContentBlocks Json? // [{ title, content }]
+  requiredActions   Json? // [{ id, priority, content }]
+  recommendedPolicies Json? // [{ id, name, organization, schedule }]
+
+  notes         String?
+  photos        Json?    // [url, ...]
+  rejectionReason String?
+
+  feedbacks     Feedback[]
+  visit         Visit?
+
+  @@map("care_logs")
+}
+
+// ============================================================
+// 피드백 (돌봄 일지 코멘트)
+// ============================================================
+
+model Feedback {
+  id         String   @id @default(cuid())
+  content    String
+  authorRole String?
+  createdAt  DateTime @default(now())
+
+  careLogId  String
+  careLog    CareLog  @relation(fields: [careLogId], references: [id])
+
+  authorId   String
+  author     User     @relation(fields: [authorId], references: [id])
+
+  @@map("feedbacks")
+}
+
+// ============================================================
+// 방문 기록 (Visit)
+// ============================================================
+
+model Visit {
+  id          String   @id @default(cuid())
+  visitDate   DateTime
+  visitType   String   @default("visit") // visit | call
+  summary     String?
+  createdAt   DateTime @default(now())
+
+  recipientId String
+  recipient   Recipient @relation(fields: [recipientId], references: [id])
+
+  managerId   String
+  manager     Manager   @relation(fields: [managerId], references: [id])
+
+  careLogId   String?   @unique
+  careLog     CareLog?  @relation(fields: [careLogId], references: [id])
+
+  @@map("visits")
+}
+
+// ============================================================
+// 메모
+// ============================================================
+
+model Memo {
+  id          String   @id @default(cuid())
+  content     String
+  type        String?  @default("normal") // normal | warning | important
+  createdAt   DateTime @default(now())
+
+  recipientId String
+  recipient   Recipient @relation(fields: [recipientId], references: [id])
+
+  authorId    String
+  author      User     @relation(fields: [authorId], references: [id])
+
+  @@map("memos")
+}
+
+// ============================================================
+// 정책 (복지 정책)
+// ============================================================
+
+model Policy {
+  id                String  @id @default(cuid())
+  name              String
+  summary           String?
+  applicationMethod String?
+  details           Json?
+
+  recipientPolicies RecipientPolicy[]
+
+  @@map("policies")
+}
+
+// ============================================================
+// 대상자-정책 연결
+// ============================================================
+
+model RecipientPolicy {
+  recipientId String
+  policyId    String
+  matchScore  Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  recipient   Recipient @relation(fields: [recipientId], references: [id])
+  policy      Policy    @relation(fields: [policyId], references: [id])
+
+  @@id([recipientId, policyId])
+  @@map("recipient_policies")
+}
+
+// ============================================================
+// 대시보드 KPI (집계 캐시)
+// ============================================================
+
+model DashboardKPI {
+  id               String   @id @default(cuid())
+  date             DateTime @default(now()) @db.Date
+  todayVisits      Int      @default(0)
+  pendingReports   Int      @default(0)
+  approvedCount    Int      @default(0)
+  totalRecipients  Int      @default(0)
+  createdAt        DateTime @default(now())
+
+  @@unique([date])
+  @@map("dashboard_kpi")
+}
+
+// ============================================================
+// 알림 (Notification)
+// ============================================================
+
+model Notification {
+  id        String   @id @default(cuid())
+  title     String
+  content   String
+  isUrgent  Boolean  @default(false)
+  link      String?
+  icon      String?  @default("info")
+  createdAt DateTime @default(now())
+
+  @@map("notifications")
+}

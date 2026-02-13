@@ -14,9 +14,29 @@ const { FlaskAiClient } = require('./adapters/ai/flaskAiClient');
 const { EnsureSummaryUsecase } = require('./usecases/ensureSummaryUsecase');
 const { EnsurePolicyRecommendationsUsecase } = require('./usecases/ensurePolicyRecommendationsUsecase');
 
+// dashboard 서비스 (인증 로직)
+const { DashboardService } = require('./services/dashboardService');
+
+// Prisma (PostgreSQL) 리포지토리 어댑터
+const { prisma } = require('./lib/prisma');
+const {
+  PrismaDashboardRepo,
+  PrismaCareLogRepo,
+  PrismaManagerRepo,
+  PrismaRecipientRepo,
+  PrismaVisitRepo,
+  PrismaMemoRepo,
+  PrismaPolicyRepo,
+} = require('./adapters/prisma');
+
 function createContainer(options = {}) {
+  // AI URL 구성 (환경변수 우선, 없으면 기본값)
+  const aiHost = process.env.AI_HOST || '127.0.0.1';
+  const aiPort = process.env.AI_PORT || '5000';
+  const defaultAiBaseUrl = `http://${aiHost}:${aiPort}`;
+
   const config = {
-    aiBaseUrl: process.env.AI_BASE_URL || 'http://127.0.0.1:5000',
+    aiBaseUrl: process.env.AI_BASE_URL || defaultAiBaseUrl,
     defaultTenant: process.env.DEFAULT_TENANT || 'safe-hi',
     aiTimeoutMs: Number(process.env.AI_TIMEOUT_MS || 120000),
     ...options.config,
@@ -26,6 +46,17 @@ function createContainer(options = {}) {
     baseUrl: config.aiBaseUrl,
     timeoutMs: config.aiTimeoutMs,
   });
+
+  // PostgreSQL (Prisma) 리포지토리 – DB 연동 완료
+  const dashboardRepo = new PrismaDashboardRepo({ prisma });
+  const careLogRepo = new PrismaCareLogRepo({ prisma });
+  const managerRepo = new PrismaManagerRepo({ prisma });
+  const recipientRepo = new PrismaRecipientRepo({ prisma });
+  const visitRepo = new PrismaVisitRepo({ prisma });
+  const memoRepo = new PrismaMemoRepo({ prisma });
+  const policyRepo = new PrismaPolicyRepo({ prisma });
+
+  const dashboardService = new DashboardService();
 
   function repos(req) {
     const tenant = resolveTenantFromReq(req, config.defaultTenant);
@@ -39,6 +70,14 @@ function createContainer(options = {}) {
           sttRepo: new MysqlYangChunSttRepository({ pool }),
           visitCategoryRepo: new MysqlVisitCategoryRepository({ pool }),
           welfarePolicyRepo: new MysqlWelfarePolicyRepository({ pool }),
+          // dashboard (PostgreSQL via Prisma)
+          dashboardRepo,
+          careLogRepo,
+          managerRepo,
+          recipientRepo,
+          visitRepo,
+          memoRepo,
+          policyRepo,
         };
     }
   }
@@ -47,6 +86,7 @@ function createContainer(options = {}) {
     config,
     repos,
     aiClient,
+    dashboardService,
     usecases: {
       ensureSummary: new EnsureSummaryUsecase({ aiClient }),
       ensurePolicyRecommendations: new EnsurePolicyRecommendationsUsecase({ aiClient }),
