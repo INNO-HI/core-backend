@@ -176,6 +176,24 @@ async function main() {
       centerId: centers['신정사회복지관'].id,
       visitDate: new Date(Date.now() - 1000 * 60 * 60 * 5),
       visitType: 'visit',
+      visitLocation: '서울시 양천구 신정로 120, 신정아파트 201동 1203호',
+      careContent: {
+        healthStatus: { status: 'caution', label: '주의', description: '관절통 호소, 보행 시 불편감' },
+        mealStatus: { status: 'poor', label: '불량', description: '식욕 저하, 식사량 평소의 50% 이하' },
+        emotionalStatus: { status: 'poor', label: '불량', description: '우울감 지속, 대화 회피 경향' },
+        livingEnvironment: { status: 'normal', label: '보통', description: '실내 정리는 되어있으나 환기 부족' },
+      },
+      careContentBlocks: [
+        { title: '건강 상태 확인', content: '관절염으로 인해 보행이 불편하시며, 최근 통증이 심해졌다고 호소하셨습니다. 진통제 복용 빈도가 늘었습니다.' },
+        { title: '정서 상태 관찰', content: '최근 2주간 외출을 거의 하지 않으시고, 대화 시에도 무기력한 모습이 관찰되었습니다. 우울 선별검사 권유 필요합니다.' },
+        { title: '식사 상태', content: '혼자 식사 준비가 어려워 간편식 위주로 드시고 계십니다. 도시락 배달 서비스 연계를 검토해야 합니다.' },
+      ],
+      requiredActions: [
+        { id: 'action-1', priority: 'urgent', content: '우울 선별검사(PHQ-9) 실시 및 정신건강복지센터 연계 필요' },
+        { id: 'action-2', priority: 'warning', content: '관절 통증 악화 - 정형외과 진료 예약 지원' },
+        { id: 'action-3', priority: 'normal', content: '도시락 배달 서비스(노인맞춤돌봄) 신청 검토' },
+      ],
+      notes: '아들 이민수씨에게 연락하여 어르신 상태 공유 필요. 다음 방문 시 우울 선별검사 도구 지참.',
     },
   });
 
@@ -186,6 +204,21 @@ async function main() {
       centerId: centers['신월복지센터'].id,
       visitDate: new Date(Date.now() - 1000 * 60 * 60 * 24),
       visitType: 'call',
+      visitLocation: '전화 상담',
+      careContent: {
+        healthStatus: { status: 'good', label: '양호', description: '혈압약 꾸준히 복용 중, 특이사항 없음' },
+        mealStatus: { status: 'good', label: '양호', description: '세끼 규칙적으로 식사 중' },
+        emotionalStatus: { status: 'good', label: '양호', description: '딸과 통화 후 기분 좋아하심' },
+        livingEnvironment: { status: 'good', label: '양호', description: '전화 상담으로 확인 불가, 지난 방문 시 양호' },
+      },
+      careContentBlocks: [
+        { title: '안부 전화 내용', content: '어르신께서 혈압약을 잘 드시고 계시며, 최근 딸 박미영씨가 방문하여 장보기를 도와주었다고 하셨습니다.' },
+        { title: '건강 상태', content: '특별한 통증이나 불편감은 없으시다고 하셨으며, 산책을 매일 30분씩 하고 계신다고 합니다.' },
+      ],
+      requiredActions: [
+        { id: 'action-1', priority: 'normal', content: '다음 정기 방문 시 혈압 측정 및 낙상 위험 재평가' },
+      ],
+      notes: '전반적으로 안정적인 상태. 다음 달 정기 방문 예정.',
     },
   });
   console.log('  ✅ Care Logs seeded (3)');
