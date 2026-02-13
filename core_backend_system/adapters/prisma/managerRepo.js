@@ -173,6 +173,101 @@ class PrismaManagerRepo {
       monthlyActivities: [],
     };
   }
+
+  /**
+   * 매니저별 보고서 목록 (전체)
+   */
+  async getManagerReports(managerId, filters = {}) {
+    const where = { managerId };
+
+    if (filters.status && filters.status !== 'all') {
+      where.status = filters.status;
+    }
+
+    if (filters.dateStart) {
+      where.visitDate = { ...(where.visitDate || {}), gte: new Date(filters.dateStart) };
+    }
+    if (filters.dateEnd) {
+      where.visitDate = { ...(where.visitDate || {}), lte: new Date(filters.dateEnd) };
+    }
+
+    const [allCount, pendingCount, approvedCount, rejectedCount] = await Promise.all([
+      this.prisma.careLog.count({ where: { managerId } }),
+      this.prisma.careLog.count({ where: { managerId, status: 'pending' } }),
+      this.prisma.careLog.count({ where: { managerId, status: 'approved' } }),
+      this.prisma.careLog.count({ where: { managerId, status: 'rejected' } }),
+    ]);
+
+    const logs = await this.prisma.careLog.findMany({
+      where,
+      include: { recipient: { select: { name: true } } },
+      orderBy: { visitDate: 'desc' },
+    });
+
+    return {
+      reports: logs.map((cl) => ({
+        id: cl.id,
+        recipientId: cl.recipientId,
+        recipientName: cl.recipient.name,
+        visitDate: cl.visitDate.toISOString(),
+        registeredAt: cl.createdAt.toISOString(),
+        status: cl.status,
+      })),
+      totalCount: logs.length,
+      statusCounts: { all: allCount, pending: pendingCount, approved: approvedCount, rejected: rejectedCount },
+    };
+  }
+
+  /**
+   * 매니저별 방문 기록 목록 (전체)
+   */
+  async getManagerVisits(managerId, filters = {}) {
+    const where = { managerId };
+
+    if (filters.visitType && filters.visitType !== 'all') {
+      // DB에서 visit/call → 프론트 regular/emergency/call 매핑
+      if (filters.visitType === 'regular') {
+        where.visitType = 'visit';
+      } else {
+        where.visitType = filters.visitType;
+      }
+    }
+
+    if (filters.search) {
+      where.recipient = { name: { contains: filters.search, mode: 'insensitive' } };
+    }
+
+    if (filters.dateStart) {
+      where.visitDate = { ...(where.visitDate || {}), gte: new Date(filters.dateStart) };
+    }
+    if (filters.dateEnd) {
+      where.visitDate = { ...(where.visitDate || {}), lte: new Date(filters.dateEnd) };
+    }
+
+    const allVisits = await this.prisma.visit.findMany({ where: { managerId } });
+    const regularCount = allVisits.filter((v) => v.visitType === 'visit').length;
+    const callCount = allVisits.filter((v) => v.visitType === 'call').length;
+    const emergencyCount = 0; // emergency type은 careLog에만 있음
+
+    const visits = await this.prisma.visit.findMany({
+      where,
+      include: { recipient: { select: { name: true } } },
+      orderBy: { visitDate: 'desc' },
+    });
+
+    return {
+      visits: visits.map((v) => ({
+        id: v.id,
+        recipientId: v.recipientId,
+        recipientName: v.recipient.name,
+        visitDate: v.visitDate.toISOString(),
+        visitType: v.visitType === 'visit' ? 'regular' : v.visitType,
+        result: v.summary || '방문 완료',
+      })),
+      totalCount: visits.length,
+      typeCounts: { all: allVisits.length, regular: regularCount, emergency: emergencyCount, call: callCount },
+    };
+  }
 }
 
 module.exports = { PrismaManagerRepo };

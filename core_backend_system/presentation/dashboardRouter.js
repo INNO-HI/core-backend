@@ -297,6 +297,39 @@ function createDashboardRouter(container) {
     }
   });
 
+  /** GET /dashboard/managers/:id/reports?status=all&dateStart=&dateEnd= */
+  router.get('/managers/:id/reports', async (req, res, next) => {
+    try {
+      const filters = {
+        status: req.query.status || 'all',
+        dateStart: req.query.dateStart || null,
+        dateEnd: req.query.dateEnd || null,
+      };
+      const { managerRepo } = container.repos(req);
+      const data = await managerRepo.getManagerReports(req.params.id, filters);
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** GET /dashboard/managers/:id/visits?visitType=all&search=&dateStart=&dateEnd= */
+  router.get('/managers/:id/visits', async (req, res, next) => {
+    try {
+      const filters = {
+        visitType: req.query.visitType || 'all',
+        search: req.query.search || '',
+        dateStart: req.query.dateStart || null,
+        dateEnd: req.query.dateEnd || null,
+      };
+      const { managerRepo } = container.repos(req);
+      const data = await managerRepo.getManagerVisits(req.params.id, filters);
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   // ============================================================
   // 대상자 (Recipients)
   // ============================================================
