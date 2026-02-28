@@ -35,6 +35,13 @@ class PrismaCareLogRepo {
       where.visitDate = { ...(where.visitDate || {}), lte: new Date(filters.dateEnd) };
     }
 
+    if (filters.dong && filters.dong !== 'all') {
+      where.recipient = {
+        ...(where.recipient || {}),
+        dong: { name: filters.dong },
+      };
+    }
+
     // 상태별 카운트 (전체 데이터 기준)
     const [allCount, pendingCount, urgentCount, approvedCount, rejectedCount] = await Promise.all([
       this.prisma.careLog.count(),
@@ -164,12 +171,12 @@ class PrismaCareLogRepo {
    */
   async addFeedback(careLogId, content) {
     // 기본 작성자 (admin) 조회
-    let author = await this.prisma.user.findFirst({
+    const author = await this.prisma.user.findFirst({
       where: { role: 'admin' },
     });
 
     if (!author) {
-      author = { id: 'system', name: '시스템' };
+      throw new Error('피드백을 작성할 관리자 계정이 존재하지 않습니다. 시드 데이터를 확인해 주세요.');
     }
 
     const fb = await this.prisma.feedback.create({

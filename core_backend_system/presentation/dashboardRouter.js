@@ -169,7 +169,7 @@ function createDashboardRouter(container) {
         dong: req.query.dong || 'all',
       };
       const page = Number(req.query.page) || 1;
-      const pageSize = Number(req.query.pageSize) || 10;
+      const pageSize = Math.min(Number(req.query.pageSize) || 10, 100);
 
       const { careLogRepo } = container.repos(req);
       const data = await careLogRepo.getCareLogs(filters, page, pageSize);
@@ -197,10 +197,17 @@ function createDashboardRouter(container) {
   router.patch('/care-logs/bulk-status', async (req, res, next) => {
     try {
       const { ids, status } = req.body;
+      const validStatuses = ['pending', 'urgent', 'approved', 'rejected'];
       if (!Array.isArray(ids) || !status) {
         return res.status(400).json({
           ok: false,
           error: { code: 'BAD_REQUEST', message: 'ids(array) and status are required' },
+        });
+      }
+      if (!validStatuses.includes(status)) {
+        return res.status(400).json({
+          ok: false,
+          error: { code: 'BAD_REQUEST', message: `status must be one of: ${validStatuses.join(', ')}` },
         });
       }
 
@@ -216,10 +223,17 @@ function createDashboardRouter(container) {
   router.patch('/care-logs/:id/status', async (req, res, next) => {
     try {
       const { status, reason } = req.body;
+      const validStatuses = ['pending', 'urgent', 'approved', 'rejected'];
       if (!status) {
         return res.status(400).json({
           ok: false,
           error: { code: 'BAD_REQUEST', message: 'status is required' },
+        });
+      }
+      if (!validStatuses.includes(status)) {
+        return res.status(400).json({
+          ok: false,
+          error: { code: 'BAD_REQUEST', message: `status must be one of: ${validStatuses.join(', ')}` },
         });
       }
 

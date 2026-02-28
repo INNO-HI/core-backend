@@ -121,21 +121,23 @@ class PrismaRecipientRepo {
 
     if (!r) return null;
 
-    // 월별 방문 통계 (최근 6개월)
-    const monthlyVisits = [];
+    // 월별 방문 통계 (최근 6개월) — 병렬 실행
     const now = new Date();
+    const monthPromises = [];
     for (let i = 5; i >= 0; i--) {
       const monthDate = new Date(now.getFullYear(), now.getMonth() - i, 1);
       const nextMonth = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
-      const count = await this.prisma.visit.count({
-        where: {
-          recipientId: id,
-          visitDate: { gte: monthDate, lt: nextMonth },
-        },
-      });
       const monthName = `${monthDate.getMonth() + 1}월`;
-      monthlyVisits.push({ month: monthName, count });
+      monthPromises.push(
+        this.prisma.visit.count({
+          where: {
+            recipientId: id,
+            visitDate: { gte: monthDate, lt: nextMonth },
+          },
+        }).then((count) => ({ month: monthName, count }))
+      );
     }
+    const monthlyVisits = await Promise.all(monthPromises);
 
     // 긴급 이력 횟수
     const urgentHistory = await this.prisma.careLog.count({
@@ -170,6 +172,7 @@ class PrismaRecipientRepo {
       healthInfo: r.healthInfo || null,
       recentVisits: r.visits.map((v) => ({
         id: v.id,
+        careLogId: v.careLogId || '',
         visitDate: v.visitDate.toISOString(),
         visitType: v.visitType,
         managerName: v.manager.name,

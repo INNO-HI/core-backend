@@ -35,12 +35,15 @@ class PrismaMemoRepo {
   /**
    * 메모 추가
    */
-  async addMemo(recipientId, content, authorId, authorName) {
+  async addMemo(recipientId, content, authorId) {
     // authorId가 없으면 기본 admin 사용
     let resolvedAuthorId = authorId;
     if (!resolvedAuthorId) {
       const admin = await this.prisma.user.findFirst({ where: { role: 'admin' } });
-      resolvedAuthorId = admin?.id || 'system';
+      if (!admin) {
+        throw new Error('메모를 작성할 관리자 계정이 존재하지 않습니다. 시드 데이터를 확인해 주세요.');
+      }
+      resolvedAuthorId = admin.id;
     }
 
     const memo = await this.prisma.memo.create({
@@ -61,6 +64,7 @@ class PrismaMemoRepo {
       authorName: memo.author.name,
       content: memo.content,
       createdAt: memo.createdAt.toISOString(),
+      type: memo.type || 'normal',
     };
   }
 }

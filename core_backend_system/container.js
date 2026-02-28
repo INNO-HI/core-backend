@@ -58,28 +58,28 @@ function createContainer(options = {}) {
 
   const dashboardService = new DashboardService();
 
+  // MySQL repos — singleton (같은 pool 공유)
+  const sttRepo = new MysqlYangChunSttRepository({ pool });
+  const visitCategoryRepo = new MysqlVisitCategoryRepository({ pool });
+  const welfarePolicyRepo = new MysqlWelfarePolicyRepository({ pool });
+
   function repos(req) {
     const tenant = resolveTenantFromReq(req, config.defaultTenant);
 
-    // 확장 포인트: tenant별 구현체 매핑
-    switch (tenant) {
-      case 'yangchun':
-      default:
-        return {
-          tenant,
-          sttRepo: new MysqlYangChunSttRepository({ pool }),
-          visitCategoryRepo: new MysqlVisitCategoryRepository({ pool }),
-          welfarePolicyRepo: new MysqlWelfarePolicyRepository({ pool }),
-          // dashboard (PostgreSQL via Prisma)
-          dashboardRepo,
-          careLogRepo,
-          managerRepo,
-          recipientRepo,
-          visitRepo,
-          memoRepo,
-          policyRepo,
-        };
-    }
+    return {
+      tenant,
+      sttRepo,
+      visitCategoryRepo,
+      welfarePolicyRepo,
+      // dashboard (PostgreSQL via Prisma)
+      dashboardRepo,
+      careLogRepo,
+      managerRepo,
+      recipientRepo,
+      visitRepo,
+      memoRepo,
+      policyRepo,
+    };
   }
 
   return {

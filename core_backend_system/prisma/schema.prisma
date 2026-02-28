@@ -74,7 +74,7 @@ model Manager {
   status        String   @default("active") // active | leave | retired
   startDate     DateTime?
   centerId      String
-  center        Center   @relation(fields: [centerId], references: [id])
+  center        Center   @relation(fields: [centerId], references: [id], onDelete: Restrict)
 
   recipientCount Int @default(0)
   monthlyVisits  Int @default(0)
@@ -84,14 +84,15 @@ model Manager {
   careLogs      CareLog[]
   visits        Visit[]
 
+  @@index([centerId])
   @@map("managers")
 }
 
 model ManagerDong {
   managerId String
   dongId    String
-  manager   Manager @relation(fields: [managerId], references: [id])
-  dong      Dong    @relation(fields: [dongId], references: [id])
+  manager   Manager @relation(fields: [managerId], references: [id], onDelete: Cascade)
+  dong      Dong    @relation(fields: [dongId], references: [id], onDelete: Cascade)
 
   @@id([managerId, dongId])
   @@map("manager_dongs")
@@ -109,12 +110,12 @@ model Recipient {
   status        String   @default("normal") // normal | caution | urgent | unvisited
   address       String?
   dongId        String?
-  dong          Dong?    @relation(fields: [dongId], references: [id])
+  dong          Dong?    @relation(fields: [dongId], references: [id], onDelete: SetNull)
   phone         String?
   careStartDate DateTime?
 
   managerId     String?
-  manager       Manager? @relation(fields: [managerId], references: [id])
+  manager       Manager? @relation(fields: [managerId], references: [id], onDelete: SetNull)
 
   healthInfo       Json? // { diseases, medications, notes }
   emergencyContact Json? // { name, relationship, phone }
@@ -127,6 +128,8 @@ model Recipient {
   memos      Memo[]
   policyRecommendations RecipientPolicy[]
 
+  @@index([managerId])
+  @@index([dongId])
   @@map("recipients")
 }
 
@@ -141,13 +144,13 @@ model CareLog {
   updatedAt     DateTime @updatedAt
 
   recipientId   String
-  recipient     Recipient @relation(fields: [recipientId], references: [id])
+  recipient     Recipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
 
   managerId     String
-  manager       Manager  @relation(fields: [managerId], references: [id])
+  manager       Manager  @relation(fields: [managerId], references: [id], onDelete: Cascade)
 
   centerId      String?
-  center        Center?  @relation(fields: [centerId], references: [id])
+  center        Center?  @relation(fields: [centerId], references: [id], onDelete: SetNull)
 
   visitDate     DateTime
   visitType     String?  @default("visit") // visit | call
@@ -165,6 +168,8 @@ model CareLog {
   feedbacks     Feedback[]
   visit         Visit?
 
+  @@index([recipientId])
+  @@index([managerId])
   @@map("care_logs")
 }
 
@@ -179,11 +184,12 @@ model Feedback {
   createdAt  DateTime @default(now())
 
   careLogId  String
-  careLog    CareLog  @relation(fields: [careLogId], references: [id])
+  careLog    CareLog  @relation(fields: [careLogId], references: [id], onDelete: Cascade)
 
   authorId   String
-  author     User     @relation(fields: [authorId], references: [id])
+  author     User     @relation(fields: [authorId], references: [id], onDelete: Restrict)
 
+  @@index([careLogId])
   @@map("feedbacks")
 }
 
@@ -199,14 +205,16 @@ model Visit {
   createdAt   DateTime @default(now())
 
   recipientId String
-  recipient   Recipient @relation(fields: [recipientId], references: [id])
+  recipient   Recipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
 
   managerId   String
-  manager     Manager   @relation(fields: [managerId], references: [id])
+  manager     Manager   @relation(fields: [managerId], references: [id], onDelete: Cascade)
 
   careLogId   String?   @unique
-  careLog     CareLog?  @relation(fields: [careLogId], references: [id])
+  careLog     CareLog?  @relation(fields: [careLogId], references: [id], onDelete: SetNull)
 
+  @@index([recipientId])
+  @@index([managerId])
   @@map("visits")
 }
 
@@ -221,11 +229,12 @@ model Memo {
   createdAt   DateTime @default(now())
 
   recipientId String
-  recipient   Recipient @relation(fields: [recipientId], references: [id])
+  recipient   Recipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
 
   authorId    String
-  author      User     @relation(fields: [authorId], references: [id])
+  author      User     @relation(fields: [authorId], references: [id], onDelete: Restrict)
 
+  @@index([recipientId])
   @@map("memos")
 }
 
@@ -255,8 +264,8 @@ model RecipientPolicy {
   matchScore  Int      @default(0)
   createdAt   DateTime @default(now())
 
-  recipient   Recipient @relation(fields: [recipientId], references: [id])
-  policy      Policy    @relation(fields: [policyId], references: [id])
+  recipient   Recipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  policy      Policy    @relation(fields: [policyId], references: [id], onDelete: Cascade)
 
   @@id([recipientId, policyId])
   @@map("recipient_policies")
