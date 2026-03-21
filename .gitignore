@@ -40,3 +40,6 @@ db_data/
 # Misc
 .pytest_cache/
 __pycache__/
+
+# SSL certificates
+**/ssl/

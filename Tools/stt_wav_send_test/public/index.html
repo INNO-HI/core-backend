@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>STT 테스트 페이지</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      min-height: 100vh;
+      padding: 40px 16px;
+    }
+    .container {
+      max-width: 560px;
+      width: 100%;
+      background: #16213e;
+      border-radius: 16px;
+      padding: 32px;
+      box-shadow: 0 8px 32px rgba(0,0,0,.4);
+    }
+    h1 { text-align: center; margin-bottom: 8px; font-size: 1.6rem; }
+    .subtitle { text-align: center; color: #aaa; font-size: .85rem; margin-bottom: 24px; }
+    .btn-group {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      margin-bottom: 24px;
+    }
+    button {
+      padding: 12px 28px;
+      font-size: 1rem;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: .2s;
+    }
+    button:disabled { opacity: .4; cursor: not-allowed; }
+    #btnStart {
+      background: #0f3460;
+      color: #fff;
+    }
+    #btnStart:hover:not(:disabled) { background: #1a4a7a; }
+    #btnStop {
+      background: #e94560;
+      color: #fff;
+    }
+    #btnStop:hover:not(:disabled) { background: #ff6b81; }
+    .status {
+      text-align: center;
+      padding: 10px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: .9rem;
+      min-height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .status.idle { background: #0f3460; }
+    .status.recording { background: #e94560; animation: pulse 1s infinite; }
+    .status.sending { background: #f08a24; }
+    .status.done { background: #27ae60; }
+    .status.error { background: #c0392b; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: .7; }
+    }
+    .result-box {
+      background: #0f3460;
+      border-radius: 8px;
+      padding: 16px;
+      min-height: 120px;
+      white-space: pre-wrap;
+      word-break: break-all;
+      font-family: 'Courier New', monospace;
+      font-size: .85rem;
+      line-height: 1.5;
+      overflow-y: auto;
+      max-height: 400px;
+    }
+    .result-title { font-weight: 600; margin-bottom: 8px; font-size: .95rem; }
+    .spec { text-align: center; color: #888; font-size: .75rem; margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎤 STT 테스트</h1>
+    <p class="subtitle">Speech-to-Text AI 모델 테스트 페이지</p>
+    <p class="spec">WAV 16kHz · 16-bit PCM · Mono → localhost:10001</p>
+
+    <div class="btn-group">
+      <button id="btnStart">녹음 시작</button>
+      <button id="btnStop" disabled>녹음 종료</button>
+    </div>
+
+    <div id="status" class="status idle">대기 중</div>
+
+    <div class="result-title">📝 전사 결과 (JSON)</div>
+    <div id="result" class="result-box">결과가 여기에 표시됩니다.</div>
+  </div>
+
+  <script>
+    const btnStart = document.getElementById('btnStart');
+    const btnStop = document.getElementById('btnStop');
+    const statusEl = document.getElementById('status');
+    const resultEl = document.getElementById('result');
+
+    let audioContext = null;
+    let mediaStream = null;
+    let sourceNode = null;
+    let processorNode = null;
+    let audioChunks = [];
+
+    function setStatus(text, cls) {
+      statusEl.textContent = text;
+      statusEl.className = 'status ' + cls;
+    }
+
+    // Float32 → Int16 PCM 변환
+    function floatTo16BitPCM(float32Array) {
+      const buffer = new ArrayBuffer(float32Array.length * 2);
+      const view = new DataView(buffer);
+      for (let i = 0; i < float32Array.length; i++) {
+        let s = Math.max(-1, Math.min(1, float32Array[i]));
+        s = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        view.setInt16(i * 2, s, true);
+      }
+      return buffer;
+    }
+
+    // PCM 데이터를 WAV Blob으로 인코딩
+    function encodeWAV(samples, sampleRate) {
+      const numChannels = 1;
+      const bitsPerSample = 16;
+      const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+      const blockAlign = numChannels * (bitsPerSample / 8);
+      const dataLength = samples.byteLength;
+      const buffer = new ArrayBuffer(44 + dataLength);
+      const view = new DataView(buffer);
+
+      // RIFF header
+      writeString(view, 0, 'RIFF');
+      view.setUint32(4, 36 + dataLength, true);
+      writeString(view, 8, 'WAVE');
+
+      // fmt chunk
+      writeString(view, 12, 'fmt ');
+      view.setUint32(16, 16, true);          // chunk size
+      view.setUint16(20, 1, true);           // PCM format
+      view.setUint16(22, numChannels, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, byteRate, true);
+      view.setUint16(32, blockAlign, true);
+      view.setUint16(34, bitsPerSample, true);
+
+      // data chunk
+      writeString(view, 36, 'data');
+      view.setUint32(40, dataLength, true);
+
+      // PCM 데이터 복사
+      const srcView = new Uint8Array(samples);
+      const dstView = new Uint8Array(buffer, 44);
+      dstView.set(srcView);
+
+      return new Blob([buffer], { type: 'audio/wav' });
+    }
+
+    function writeString(view, offset, str) {
+      for (let i = 0; i < str.length; i++) {
+        view.setUint8(offset + i, str.charCodeAt(i));
+      }
+    }
+
+    // 리샘플링: 브라우저 sampleRate → 16kHz
+    function resample(audioBuffer, targetRate) {
+      const srcRate = audioBuffer.sampleRate;
+      if (srcRate === targetRate) {
+        return audioBuffer.getChannelData(0);
+      }
+      const ratio = srcRate / targetRate;
+      const srcData = audioBuffer.getChannelData(0);
+      const newLength = Math.round(srcData.length / ratio);
+      const result = new Float32Array(newLength);
+      for (let i = 0; i < newLength; i++) {
+        const srcIndex = i * ratio;
+        const low = Math.floor(srcIndex);
+        const high = Math.min(low + 1, srcData.length - 1);
+        const frac = srcIndex - low;
+        result[i] = srcData[low] * (1 - frac) + srcData[high] * frac;
+      }
+      return result;
+    }
+
+    // 녹음 시작
+    btnStart.addEventListener('click', async () => {
+      try {
+        audioChunks = [];
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            sampleRate: 16000,
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false
+          }
+        });
+
+        audioContext = new AudioContext({ sampleRate: 16000 });
+        sourceNode = audioContext.createMediaStreamSource(mediaStream);
+
+        // ScriptProcessorNode로 raw PCM 수집
+        const bufferSize = 4096;
+        processorNode = audioContext.createScriptProcessor(bufferSize, 1, 1);
+        processorNode.onaudioprocess = (e) => {
+          const channelData = e.inputBuffer.getChannelData(0);
+          audioChunks.push(new Float32Array(channelData));
+        };
+
+        sourceNode.connect(processorNode);
+        processorNode.connect(audioContext.destination);
+
+        btnStart.disabled = true;
+        btnStop.disabled = false;
+        setStatus('🔴 녹음 중...', 'recording');
+      } catch (err) {
+        setStatus('마이크 접근 실패: ' + err.message, 'error');
+      }
+    });
+
+    // 녹음 종료 + WAV 전송
+    btnStop.addEventListener('click', async () => {
+      btnStop.disabled = true;
+      btnStart.disabled = false;
+
+      // 녹음 정지
+      if (processorNode) { processorNode.disconnect(); processorNode = null; }
+      if (sourceNode) { sourceNode.disconnect(); sourceNode = null; }
+      if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+
+      if (audioChunks.length === 0) {
+        setStatus('녹음된 데이터가 없습니다.', 'error');
+        return;
+      }
+
+      setStatus('⏳ WAV 변환 및 전송 중...', 'sending');
+
+      // Float32 청크 합치기
+      const totalLength = audioChunks.reduce((sum, c) => sum + c.length, 0);
+      const merged = new Float32Array(totalLength);
+      let offset = 0;
+      for (const chunk of audioChunks) {
+        merged.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      // 실제 sampleRate가 16kHz가 아닐 수 있으므로 리샘플링
+      const actualRate = audioContext ? audioContext.sampleRate : 16000;
+      let finalSamples;
+      if (actualRate !== 16000) {
+        // OfflineAudioContext로 리샘플링
+        const offlineCtx = new OfflineAudioContext(1, Math.round(merged.length * 16000 / actualRate), 16000);
+        const buffer = offlineCtx.createBuffer(1, merged.length, actualRate);
+        buffer.getChannelData(0).set(merged);
+        const src = offlineCtx.createBufferSource();
+        src.buffer = buffer;
+        src.connect(offlineCtx.destination);
+        src.start(0);
+        const rendered = await offlineCtx.startRendering();
+        finalSamples = rendered.getChannelData(0);
+      } else {
+        finalSamples = merged;
+      }
+
+      if (audioContext) { await audioContext.close(); audioContext = null; }
+
+      // WAV 인코딩
+      const pcmData = floatTo16BitPCM(finalSamples);
+      const wavBlob = encodeWAV(pcmData, 16000);
+
+      const duration = (finalSamples.length / 16000).toFixed(2);
+      console.log(`WAV: ${(wavBlob.size / 1024).toFixed(1)}KB, ${duration}s, 16kHz/16bit/mono`);
+
+      // 서버(프록시)를 통해 STT AI로 전송
+      try {
+        const formData = new FormData();
+        formData.append('file', wavBlob, 'recording.wav');
+
+        const res = await fetch('/api/stt', {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        }
+
+        const json = await res.json();
+        resultEl.textContent = JSON.stringify(json, null, 2);
+        setStatus(`✅ 전사 완료 (${duration}초 녹음)`, 'done');
+      } catch (err) {
+        setStatus('전송 실패: ' + err.message, 'error');
+        resultEl.textContent = '오류: ' + err.message;
+      }
+    });
+  </script>
+</body>
+</html>
