@@ -5,16 +5,24 @@ const FormData = require('form-data');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = 3001;
 const STT_URL = 'http://localhost:10001/api/stt-infer';
+const WAV_SAVE_DIR = '/data/wav';
 
 // SSL 인증서 로드
 const sslOptions = {
   key: fs.readFileSync(path.join(__dirname, 'ssl', 'server.key')),
   cert: fs.readFileSync(path.join(__dirname, 'ssl', 'server.crt')),
 };
+
+// /data/wav 디렉토리 생성
+if (!fs.existsSync(WAV_SAVE_DIR)) {
+  fs.mkdirSync(WAV_SAVE_DIR, { recursive: true });
+  console.log(`[Init] ${WAV_SAVE_DIR} 디렉토리 생성됨`);
+}
 
 // multer: 메모리에 WAV 파일 저장
 const upload = multer({
@@ -33,6 +41,23 @@ app.post('/api/stt', upload.single('file'), async (req, res) => {
 
   const wavBuffer = req.file.buffer;
   console.log(`[STT] 수신: ${(wavBuffer.length / 1024).toFixed(1)}KB WAV`);
+
+  // WAV 파일 저장
+  const timestamp = Date.now();
+  const randomStr = crypto.randomBytes(4).toString('hex');
+  const filename = `wav_${timestamp}_${randomStr}.wav`;
+  const filepath = path.join(WAV_SAVE_DIR, filename);
+
+  try {
+    fs.writeFileSync(filepath, wavBuffer);
+    console.log(`[STT] 파일 저장: ${filepath}`);
+  } catch (saveErr) {
+    console.error(`[STT] 파일 저장 실패: ${saveErr.message}`);
+    return res.status(500).json({
+      error: 'WAV 파일 저장 실패',
+      detail: saveErr.message,
+    });
+  }
 
   try {
     // STT AI 서버로 전송
