@@ -112,15 +112,85 @@ class PrismaDashboardRepo {
       take: limit,
     });
 
-    return notifs.map((n) => ({
-      id: n.id,
-      title: n.title,
-      content: n.content,
-      createdAt: n.createdAt.toISOString(),
-      isUrgent: n.isUrgent,
-      link: n.link,
-      icon: n.icon,
+    return notifs.map((n) => {
+      const isReport = /report|보고서|리포트/i.test(`${n.title} ${n.content}`) || String(n.link || '').includes('/care-logs');
+      return {
+        id: n.id,
+        title: n.title,
+        content: n.content,
+        createdAt: n.createdAt.toISOString(),
+        isUrgent: n.isUrgent,
+        link: n.link,
+        icon: n.icon,
+        category: isReport ? 'report' : 'care',
+      };
+    });
+  }
+
+  /**
+   * 복지 뉴스 (임시: 백엔드 제공형 정적 피드)
+   */
+  async getWelfareNews(limit = 10) {
+    const items = [
+      {
+        id: 'welfare-001',
+        title: '2026 상반기 복지 서비스 개편',
+        description: '독거노인 방문 횟수 월 8회로 확대',
+        tag: '신규',
+        date: '2026.03.15',
+      },
+      {
+        id: 'welfare-002',
+        title: '노인 맞춤 돌봄 교육 지원 확대',
+        description: '치매 예방 프로그램 비용 지원 강화',
+        tag: '업데이트',
+        date: '2026.03.12',
+      },
+      {
+        id: 'welfare-003',
+        title: '기초생활수급자 의료급여 변경',
+        description: '본인부담금 경감 적용 대상 확대',
+        tag: '정책',
+        date: '2026.03.08',
+      },
+    ];
+    return items.slice(0, limit);
+  }
+
+  /**
+   * 업무 요청 (긴급/대기 상태의 최근 돌봄 일지 기반)
+   */
+  async getTasks(limit = 10) {
+    const logs = await this.prisma.careLog.findMany({
+      where: { status: { in: ['urgent', 'pending'] } },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: {
+        recipient: { select: { name: true } },
+        manager: { select: { name: true } },
+      },
+    });
+
+    return logs.map((log) => ({
+      id: log.id,
+      title: `${log.recipient.name} 대상자 돌봄 보고`,
+      meta: `${log.manager.name} 매니저 · ${log.visitDate.toISOString().split('T')[0]}`,
+      badge: log.status === 'urgent' ? '긴급' : '처리 중',
+      badgeColor: log.status === 'urgent' ? '#EF4444' : '#D97706',
+      badgeBg: log.status === 'urgent' ? '#FEE2E2' : '#FEF3C7',
     }));
+  }
+
+  /**
+   * 공지사항 (임시: 백엔드 제공형 정적 피드)
+   */
+  async getNotices(limit = 10) {
+    const items = [
+      { id: 'notice-001', title: '4월 전체 매니저 회의 안내', date: '2026.03.15', isNew: true },
+      { id: 'notice-002', title: '돌봄 기록 시스템 업데이트 안내', date: '2026.03.12', isNew: false },
+      { id: 'notice-003', title: '2026 상반기 교육 일정 공지', date: '2026.03.08', isNew: false },
+    ];
+    return items.slice(0, limit);
   }
 }
 

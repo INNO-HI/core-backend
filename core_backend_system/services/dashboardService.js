@@ -98,9 +98,31 @@ class DashboardService {
   }
 
   async resetPassword(data) {
-    if (!data.token || data.token.length < 10) {
-      return { success: false, error: '유효하지 않거나 만료된 링크입니다.' };
+    const nextPassword = data.newPassword || data.password;
+    if (!nextPassword || nextPassword.length < 6) {
+      return { success: false, error: '비밀번호는 6자 이상이어야 합니다.' };
     }
+
+    // 토큰 방식 재설정
+    if (data.token) {
+      if (data.token.length < 10) {
+        return { success: false, error: '유효하지 않거나 만료된 링크입니다.' };
+      }
+      return { success: true };
+    }
+
+    // 이메일 기반 재설정(모바일 앱 단순 플로우)
+    const normalizedEmail = (data.email || '').toLowerCase();
+    if (!normalizedEmail) {
+      return { success: false, error: '이메일 정보가 필요합니다.' };
+    }
+
+    const user = users.find((u) => u.email === normalizedEmail);
+    if (!user) {
+      return { success: false, error: '가입된 계정을 찾을 수 없습니다.' };
+    }
+
+    user.password = nextPassword;
     return { success: true };
   }
 

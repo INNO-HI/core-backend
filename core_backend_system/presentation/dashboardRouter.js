@@ -154,6 +154,42 @@ function createDashboardRouter(container) {
     }
   });
 
+  /** GET /dashboard/welfare-news?limit=10 */
+  router.get('/welfare-news', async (req, res, next) => {
+    try {
+      const limit = Number(req.query.limit) || 10;
+      const { dashboardRepo } = container.repos(req);
+      const data = await dashboardRepo.getWelfareNews(limit);
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** GET /dashboard/tasks?limit=10 */
+  router.get('/tasks', async (req, res, next) => {
+    try {
+      const limit = Number(req.query.limit) || 10;
+      const { dashboardRepo } = container.repos(req);
+      const data = await dashboardRepo.getTasks(limit);
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** GET /dashboard/notices?limit=10 */
+  router.get('/notices', async (req, res, next) => {
+    try {
+      const limit = Number(req.query.limit) || 10;
+      const { dashboardRepo } = container.repos(req);
+      const data = await dashboardRepo.getNotices(limit);
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   // ============================================================
   // 돌봄 일지 (Care Logs)
   // ============================================================
@@ -344,6 +380,30 @@ function createDashboardRouter(container) {
     }
   });
 
+  /** POST /dashboard/managers/:id/visits */
+  router.post('/managers/:id/visits', async (req, res, next) => {
+    try {
+      const { recipientId, visitDate, visitType, summary } = req.body || {};
+      if (!recipientId || !visitDate) {
+        return res.status(400).json({
+          ok: false,
+          error: { code: 'BAD_REQUEST', message: 'recipientId and visitDate are required' },
+        });
+      }
+
+      const { visitRepo } = container.repos(req);
+      const data = await visitRepo.createVisitForManager(req.params.id, {
+        recipientId,
+        visitDate,
+        visitType,
+        summary,
+      });
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   // ============================================================
   // 대상자 (Recipients)
   // ============================================================
@@ -385,6 +445,25 @@ function createDashboardRouter(container) {
       if (!data) {
         return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '대상자를 찾을 수 없습니다' } });
       }
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** GET /dashboard/recipients/:id/care-logs?status=all&page=1&pageSize=20&dateStart=&dateEnd= */
+  router.get('/recipients/:id/care-logs', async (req, res, next) => {
+    try {
+      const filters = {
+        status: req.query.status || 'all',
+        dateStart: req.query.dateStart || null,
+        dateEnd: req.query.dateEnd || null,
+      };
+      const page = Number(req.query.page) || 1;
+      const pageSize = Math.min(Number(req.query.pageSize) || 20, 100);
+
+      const { careLogRepo } = container.repos(req);
+      const data = await careLogRepo.getCareLogsByRecipientId(req.params.id, filters, page, pageSize);
       return res.json({ ok: true, data });
     } catch (err) {
       next(err);

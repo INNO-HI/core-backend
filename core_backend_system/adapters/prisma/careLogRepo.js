@@ -79,11 +79,60 @@ class PrismaCareLogRepo {
         managerName: l.manager.name,
         centerName: l.center?.name || '',
         visitDate: l.visitDate.toISOString(),
+        visitType: l.visitType || 'visit',
         registeredAt: l.createdAt.toISOString(),
         status: l.status,
       })),
       totalCount,
       statusCounts,
+    };
+  }
+
+  /**
+   * 대상자별 돌봄 일지 목록 조회
+   */
+  async getCareLogsByRecipientId(recipientId, filters = {}, page = 1, pageSize = 20) {
+    const where = { recipientId };
+
+    if (filters.status && filters.status !== 'all') {
+      where.status = filters.status;
+    }
+
+    if (filters.dateStart) {
+      where.visitDate = { ...(where.visitDate || {}), gte: new Date(filters.dateStart) };
+    }
+    if (filters.dateEnd) {
+      where.visitDate = { ...(where.visitDate || {}), lte: new Date(filters.dateEnd) };
+    }
+
+    const totalCount = await this.prisma.careLog.count({ where });
+    const logs = await this.prisma.careLog.findMany({
+      where,
+      orderBy: { visitDate: 'desc' },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      include: {
+        recipient: { select: { id: true, name: true } },
+        manager: { select: { id: true, name: true } },
+        center: { select: { name: true } },
+      },
+    });
+
+    return {
+      logs: logs.map((l) => ({
+        id: l.id,
+        recipientId: l.recipient.id,
+        recipientName: l.recipient.name,
+        managerId: l.manager.id,
+        managerName: l.manager.name,
+        centerName: l.center?.name || '',
+        visitDate: l.visitDate.toISOString(),
+        visitType: l.visitType || 'visit',
+        status: l.status,
+        registeredAt: l.createdAt.toISOString(),
+        rejectionReason: l.rejectionReason || null,
+      })),
+      totalCount,
     };
   }
 

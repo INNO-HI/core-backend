@@ -258,7 +258,16 @@ class PrismaManagerRepo {
 
     const visits = await this.prisma.visit.findMany({
       where,
-      include: { recipient: { select: { name: true } } },
+      include: {
+        recipient: {
+          select: {
+            name: true,
+            phone: true,
+            address: true,
+            status: true,
+          },
+        },
+      },
       orderBy: { visitDate: 'desc' },
     });
 
@@ -267,6 +276,9 @@ class PrismaManagerRepo {
         id: v.id,
         recipientId: v.recipientId,
         recipientName: v.recipient.name,
+        recipientPhone: v.recipient.phone || '',
+        recipientAddress: v.recipient.address || '',
+        recipientStatus: v.recipient.status || 'normal',
         visitDate: v.visitDate.toISOString(),
         visitType: v.visitType === 'visit' ? 'regular' : v.visitType,
         result: v.summary || '방문 완료',

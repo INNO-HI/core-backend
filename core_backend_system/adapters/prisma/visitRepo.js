@@ -40,6 +40,46 @@ class PrismaVisitRepo {
       summary: v.summary || '',
     }));
   }
+
+  /**
+   * 매니저 일정(방문/전화) 생성
+   */
+  async createVisitForManager(managerId, data) {
+    const visitDate = new Date(data.visitDate);
+    if (Number.isNaN(visitDate.getTime())) {
+      throw new Error('visitDate is invalid');
+    }
+
+    const visitType = data.visitType === 'call' ? 'call' : 'visit';
+
+    const created = await this.prisma.visit.create({
+      data: {
+        managerId,
+        recipientId: data.recipientId,
+        visitDate,
+        visitType,
+        summary: data.summary || '일정 등록',
+      },
+      include: {
+        manager: { select: { name: true } },
+        recipient: { select: { name: true, phone: true, address: true, status: true } },
+      },
+    });
+
+    return {
+      id: created.id,
+      recipientId: created.recipientId,
+      recipientName: created.recipient.name,
+      recipientPhone: created.recipient.phone || '',
+      recipientAddress: created.recipient.address || '',
+      recipientStatus: created.recipient.status || 'normal',
+      managerId: created.managerId,
+      managerName: created.manager.name,
+      visitDate: created.visitDate.toISOString(),
+      visitType: created.visitType === 'visit' ? 'regular' : created.visitType,
+      result: created.summary || '일정 등록',
+    };
+  }
 }
 
 module.exports = { PrismaVisitRepo };
