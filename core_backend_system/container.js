@@ -29,6 +29,22 @@ const {
   PrismaPolicyRepo,
 } = require('./adapters/prisma');
 
+// InMemory 리포지토리 (DB 없이 로컬 테스트용)
+const {
+  InMemoryDashboardRepo,
+  InMemoryCareLogRepo,
+  InMemoryManagerRepo,
+  InMemoryRecipientRepo,
+  InMemoryVisitRepo,
+  InMemoryMemoRepo,
+  InMemoryPolicyRepo,
+} = require('./adapters/inmemory/dashboardRepositories');
+const {
+  InMemoryYangChunSttRepository,
+  InMemoryVisitCategoryRepository,
+  InMemoryWelfarePolicyRepository,
+} = require('./adapters/inmemory/coreRepositories');
+
 function createContainer(options = {}) {
   // AI URL 구성 (환경변수 우선, 없으면 기본값)
   const aiHost = process.env.AI_HOST || '127.0.0.1';
@@ -47,21 +63,27 @@ function createContainer(options = {}) {
     timeoutMs: config.aiTimeoutMs,
   });
 
-  // PostgreSQL (Prisma) 리포지토리 – DB 연동 완료
-  const dashboardRepo = new PrismaDashboardRepo({ prisma });
-  const careLogRepo = new PrismaCareLogRepo({ prisma });
-  const managerRepo = new PrismaManagerRepo({ prisma });
-  const recipientRepo = new PrismaRecipientRepo({ prisma });
-  const visitRepo = new PrismaVisitRepo({ prisma });
-  const memoRepo = new PrismaMemoRepo({ prisma });
-  const policyRepo = new PrismaPolicyRepo({ prisma });
+  // USE_INMEMORY=true 이면 DB 없이 InMemory 레포 사용 (로컬 테스트용)
+  const useInMemory = process.env.USE_INMEMORY === 'true';
+
+  const dashboardRepo = useInMemory ? new InMemoryDashboardRepo() : new PrismaDashboardRepo({ prisma });
+  const careLogRepo = useInMemory ? new InMemoryCareLogRepo() : new PrismaCareLogRepo({ prisma });
+  const managerRepo = useInMemory ? new InMemoryManagerRepo() : new PrismaManagerRepo({ prisma });
+  const recipientRepo = useInMemory ? new InMemoryRecipientRepo() : new PrismaRecipientRepo({ prisma });
+  const visitRepo = useInMemory ? new InMemoryVisitRepo() : new PrismaVisitRepo({ prisma });
+  const memoRepo = useInMemory ? new InMemoryMemoRepo() : new PrismaMemoRepo({ prisma });
+  const policyRepo = useInMemory ? new InMemoryPolicyRepo() : new PrismaPolicyRepo({ prisma });
 
   const dashboardService = new DashboardService();
 
   // MySQL repos — singleton (같은 pool 공유)
-  const sttRepo = new MysqlYangChunSttRepository({ pool });
-  const visitCategoryRepo = new MysqlVisitCategoryRepository({ pool });
-  const welfarePolicyRepo = new MysqlWelfarePolicyRepository({ pool });
+  const sttRepo = useInMemory ? new InMemoryYangChunSttRepository() : new MysqlYangChunSttRepository({ pool });
+  const visitCategoryRepo = useInMemory
+    ? new InMemoryVisitCategoryRepository()
+    : new MysqlVisitCategoryRepository({ pool });
+  const welfarePolicyRepo = useInMemory
+    ? new InMemoryWelfarePolicyRepository()
+    : new MysqlWelfarePolicyRepository({ pool });
 
   function repos(req) {
     const tenant = resolveTenantFromReq(req, config.defaultTenant);
