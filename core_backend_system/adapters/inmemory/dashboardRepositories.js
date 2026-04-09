@@ -33,10 +33,31 @@ const mockNotifications = [
   { id: 'notif-004', title: '월간 보고서 완료', content: '12월 월간 보고서가 정상적으로 생성되었습니다.', createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(), isUrgent: false, icon: 'success' },
 ];
 
+const mockWelfareNews = [
+  { id: 'welfare-001', title: '2026 상반기 복지 서비스 개편', description: '독거노인 방문 횟수 월 8회로 확대', tag: '신규', date: '2026.03.15' },
+  { id: 'welfare-002', title: '노인 맞춤 돌봄 교육 지원 확대', description: '치매 예방 프로그램 비용 지원 강화', tag: '업데이트', date: '2026.03.12' },
+  { id: 'welfare-003', title: '기초생활수급자 의료급여 변경', description: '본인부담금 경감 적용 대상 확대', tag: '정책', date: '2026.03.08' },
+];
+
+const mockTasks = [
+  { id: 'cl-001', title: '이복동 어르신 대상자 돌봄 보고', meta: '이영희 매니저 · 2026-01-04', badge: '긴급', badgeColor: '#EF4444', badgeBg: '#FEE2E2' },
+  { id: 'cl-002', title: '박순자 어르신 대상자 돌봄 보고', meta: '박지민 매니저 · 2026-01-04', badge: '처리 중', badgeColor: '#D97706', badgeBg: '#FEF3C7' },
+  { id: 'cl-004', title: '김철수 어르신 대상자 돌봄 보고', meta: '김민수 매니저 · 2026-01-03', badge: '처리 중', badgeColor: '#D97706', badgeBg: '#FEF3C7' },
+];
+
+const mockNotices = [
+  { id: 'notice-001', title: '4월 전체 매니저 회의 안내', date: '2026.03.15', isNew: true },
+  { id: 'notice-002', title: '돌봄 기록 시스템 업데이트 안내', date: '2026.03.12', isNew: false },
+  { id: 'notice-003', title: '2026 상반기 교육 일정 공지', date: '2026.03.08', isNew: false },
+];
+
 class InMemoryDashboardRepo {
   async getKPI() { return mockDashboardKPI; }
   async getRecentReports(limit) { return mockRecentReports.slice(0, limit); }
   async getNotifications(limit) { return mockNotifications.slice(0, limit); }
+  async getWelfareNews(limit) { return mockWelfareNews.slice(0, limit); }
+  async getTasks(limit) { return mockTasks.slice(0, limit); }
+  async getNotices(limit) { return mockNotices.slice(0, limit); }
 }
 
 // ============================================================
@@ -275,6 +296,100 @@ class InMemoryManagerRepo {
       monthlyActivities: [],
     };
   }
+
+  async getManagerReports(managerId, filters = {}) {
+    const manager = allManagers.find((item) => item.id === managerId);
+    if (!manager) {
+      return { reports: [], totalCount: 0, statusCounts: { all: 0, pending: 0, approved: 0, rejected: 0 } };
+    }
+
+    let reports = allCareLogs
+      .filter((log) => log.managerName === manager.name)
+      .map((log) => ({
+        id: log.id,
+        recipientId: `rec-${log.id.slice(-3).padStart(4, '0')}`,
+        recipientName: log.recipientName,
+        visitDate: log.visitDate,
+        registeredAt: log.registeredAt,
+        status: log.status,
+      }));
+
+    if (filters.status && filters.status !== 'all') {
+      reports = reports.filter((report) => report.status === filters.status);
+    }
+    if (filters.dateStart) {
+      reports = reports.filter((report) => new Date(report.visitDate) >= new Date(filters.dateStart));
+    }
+    if (filters.dateEnd) {
+      reports = reports.filter((report) => new Date(report.visitDate) <= new Date(filters.dateEnd));
+    }
+
+    const baseReports = allCareLogs.filter((log) => log.managerName === manager.name);
+    const statusCounts = { all: baseReports.length, pending: 0, approved: 0, rejected: 0 };
+    for (const report of baseReports) {
+      if (statusCounts[report.status] !== undefined) {
+        statusCounts[report.status]++;
+      }
+    }
+
+    return {
+      reports,
+      totalCount: reports.length,
+      statusCounts,
+    };
+  }
+
+  async getManagerVisits(managerId, filters = {}) {
+    const manager = allManagers.find((item) => item.id === managerId);
+    if (!manager) {
+      return { visits: [], totalCount: 0, typeCounts: { all: 0, regular: 0, emergency: 0, call: 0 } };
+    }
+
+    let visits = mockVisits
+      .filter((visit) => visit.managerName === manager.name)
+      .map((visit) => {
+        const recipient = allRecipients.find((item) => item.id === visit.recipientId);
+        return {
+          id: visit.id,
+          recipientId: visit.recipientId,
+          recipientName: recipient?.name || '알 수 없음',
+          recipientPhone: recipient?.basicInfo?.phone || recipient?.phone || '',
+          recipientAddress: recipient?.address || '',
+          recipientStatus: recipient?.status || 'normal',
+          visitDate: visit.visitDate,
+          visitType: visit.visitType === 'visit' ? 'regular' : visit.visitType,
+          result: visit.summary || '방문 완료',
+        };
+      });
+
+    if (filters.visitType && filters.visitType !== 'all') {
+      visits = visits.filter((visit) => visit.visitType === filters.visitType);
+    }
+    if (filters.search) {
+      const keyword = filters.search.toLowerCase();
+      visits = visits.filter((visit) => visit.recipientName.toLowerCase().includes(keyword));
+    }
+    if (filters.dateStart) {
+      visits = visits.filter((visit) => new Date(visit.visitDate) >= new Date(filters.dateStart));
+    }
+    if (filters.dateEnd) {
+      visits = visits.filter((visit) => new Date(visit.visitDate) <= new Date(filters.dateEnd));
+    }
+
+    const baseVisits = mockVisits.filter((visit) => visit.managerName === manager.name);
+    const typeCounts = {
+      all: baseVisits.length,
+      regular: baseVisits.filter((visit) => visit.visitType === 'visit').length,
+      emergency: baseVisits.filter((visit) => visit.visitType === 'emergency').length,
+      call: baseVisits.filter((visit) => visit.visitType === 'call').length,
+    };
+
+    return {
+      visits,
+      totalCount: visits.length,
+      typeCounts,
+    };
+  }
 }
 
 // ============================================================
@@ -375,6 +490,26 @@ class InMemoryVisitRepo {
     if (filters.dateStart) visits = visits.filter((v) => new Date(v.visitDate) >= new Date(filters.dateStart));
     if (filters.dateEnd) visits = visits.filter((v) => new Date(v.visitDate) <= new Date(filters.dateEnd));
     return visits.sort((a, b) => new Date(b.visitDate) - new Date(a.visitDate));
+  }
+
+  async createVisitForManager(managerId, data) {
+    const manager = allManagers.find((m) => m.id === managerId);
+    const recipient = allRecipients.find((r) => r.id === data.recipientId);
+    const newVisit = {
+      id: `visit-${Date.now()}`,
+      recipientId: data.recipientId,
+      recipientName: recipient ? recipient.name : '알 수 없음',
+      recipientPhone: '',
+      recipientAddress: recipient ? recipient.address : '',
+      recipientStatus: recipient ? recipient.status : 'normal',
+      managerId,
+      managerName: manager ? manager.name : '알 수 없음',
+      visitDate: data.visitDate,
+      visitType: data.visitType === 'visit' ? 'regular' : (data.visitType || 'regular'),
+      result: data.summary || '일정 등록',
+    };
+    mockVisits.push({ ...newVisit, careLogId: null });
+    return newVisit;
   }
 }
 

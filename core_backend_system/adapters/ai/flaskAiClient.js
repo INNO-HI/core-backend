@@ -42,10 +42,35 @@ class FlaskAiClient {
     return data.items;
   }
 
+  async inferVisitSummary({ transcript }) {
+    const data = await this._postJson('/v1/infer/visit_summary', {
+      transcript,
+    });
+
+    if (!data || !Array.isArray(data.items)) {
+      throw new Error('AI response invalid (items missing)');
+    }
+
+    return data.items;
+  }
+
   async recommendPolicies({ reportid, transcriptPath, topK = 3 }) {
     const data = await this._postJson('/v1/infer/policy_recommendations', {
       report_id: reportid,
       transcript_path: transcriptPath,
+      top_k: topK,
+    });
+
+    if (!data || !Array.isArray(data.policies)) {
+      throw new Error('AI response invalid (policies missing)');
+    }
+
+    return data.policies;
+  }
+
+  async inferPolicyRecommendations({ transcript, topK = 3 }) {
+    const data = await this._postJson('/v1/infer/policy_recommendations', {
+      transcript,
       top_k: topK,
     });
 

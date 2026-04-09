@@ -4,6 +4,7 @@ const cors = require('cors');
 const { createContainer } = require('./container');
 const { createApiRouter } = require('./presentation/apiRouter');
 const { createDashboardRouter } = require('./presentation/dashboardRouter');
+const { renderDemoPage } = require('./presentation/demoPage');
 
 function createCoreApp(options = {}) {
   const app = express();
@@ -32,6 +33,11 @@ function createCoreApp(options = {}) {
 
   app.get('/core/health', (req, res) => {
     res.json({ ok: true, service: 'core_backend_system' });
+  });
+
+  app.get('/demo', (req, res) => {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(renderDemoPage());
   });
 
   // eslint-disable-next-line no-unused-vars
