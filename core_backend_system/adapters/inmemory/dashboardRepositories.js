@@ -204,6 +204,16 @@ class InMemoryCareLogRepo {
     return { success: true, id, newStatus: status };
   }
 
+  async getCareLogsByRecipientId(recipientId, filters = {}, page = 1, pageSize = 20) {
+    let logs = [...allCareLogs];
+    if (filters.status && filters.status !== 'all') logs = logs.filter((l) => l.status === filters.status);
+    if (filters.dateStart) logs = logs.filter((l) => new Date(l.visitDate) >= new Date(filters.dateStart));
+    if (filters.dateEnd) logs = logs.filter((l) => new Date(l.visitDate) <= new Date(filters.dateEnd));
+    const totalCount = logs.length;
+    const start = (page - 1) * pageSize;
+    return { logs: logs.slice(start, start + pageSize), totalCount };
+  }
+
   async addFeedback(careLogId, content) {
     const fb = {
       id: `fb-${Date.now()}`,

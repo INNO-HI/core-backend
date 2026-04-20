@@ -115,6 +115,36 @@ function createDashboardRouter(container) {
     }
   });
 
+  /** DELETE /dashboard/auth/account */
+  router.delete('/auth/account', async (req, res, next) => {
+    try {
+      const authHeader = req.headers['authorization'] || '';
+      if (!authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ ok: false, error: { code: 'UNAUTHORIZED', message: '인증이 필요합니다.' } });
+      }
+      const { reason } = req.body || {};
+      await container.dashboardService.deleteAccount({ userId: null, reason });
+      return res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** POST /dashboard/auth/delete-account (Flutter 폴백 엔드포인트) */
+  router.post('/auth/delete-account', async (req, res, next) => {
+    try {
+      const authHeader = req.headers['authorization'] || '';
+      if (!authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ ok: false, error: { code: 'UNAUTHORIZED', message: '인증이 필요합니다.' } });
+      }
+      const { reason } = req.body || {};
+      await container.dashboardService.deleteAccount({ userId: null, reason });
+      return res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   // ============================================================
   // 대시보드 KPI
   // ============================================================

@@ -144,6 +144,12 @@ class DashboardService {
   async requestOrganizationVerification(_data) {
     return { success: true, data: { requestId: 'req-' + Date.now() } };
   }
+
+  async deleteAccount({ userId, reason }) {
+    const idx = users.findIndex((u) => u.id === userId);
+    if (idx !== -1) users.splice(idx, 1);
+    return { success: true };
+  }
 }
 
 module.exports = { DashboardService };
