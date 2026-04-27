@@ -8,6 +8,66 @@
  */
 
 const express = require('express');
+const crypto = require('crypto');
+const { prisma } = require('../lib/prisma');
+
+const ADMIN_SYSTEM_PASSWORD = process.env.ADMIN_SYSTEM_PASSWORD || 'safehiadmin';
+const PRISMA_STUDIO_SESSION_TTL_MS = 5 * 60 * 1000;
+const PRISMA_STUDIO_BASE_URL =
+  process.env.PRISMA_STUDIO_BASE_URL || 'https://api.safe-hi.xyz/prisma-studio';
+const prismaStudioSessions = new Map();
+
+function isValidSystemPassword(password) {
+  return typeof password === 'string' && password.length > 0 && password === ADMIN_SYSTEM_PASSWORD;
+}
+
+function readSystemPassword(req) {
+  const headerPassword = req.headers['x-admin-system-password'];
+  if (Array.isArray(headerPassword)) {
+    return headerPassword[0];
+  }
+  return headerPassword;
+}
+
+function prunePrismaStudioSessions() {
+  const now = Date.now();
+  for (const [token, expiresAt] of prismaStudioSessions.entries()) {
+    if (expiresAt <= now) {
+      prismaStudioSessions.delete(token);
+    }
+  }
+}
+
+function createPrismaStudioSessionToken() {
+  prunePrismaStudioSessions();
+  const token = crypto.randomBytes(24).toString('hex');
+  prismaStudioSessions.set(token, Date.now() + PRISMA_STUDIO_SESSION_TTL_MS);
+  return token;
+}
+
+function hasValidPrismaStudioSession(token) {
+  if (typeof token !== 'string' || token.length === 0) {
+    return false;
+  }
+
+  prunePrismaStudioSessions();
+  const expiresAt = prismaStudioSessions.get(token);
+  if (!expiresAt) {
+    return false;
+  }
+
+  if (expiresAt <= Date.now()) {
+    prismaStudioSessions.delete(token);
+    return false;
+  }
+
+  return true;
+}
+
+function hasBearerAuthorization(req) {
+  const authHeader = req.headers['authorization'] || '';
+  return typeof authHeader === 'string' && authHeader.startsWith('Bearer ');
+}
 
 function createDashboardRouter(container) {
   const router = express.Router();
@@ -157,6 +217,142 @@ function createDashboardRouter(container) {
       return res.json({ ok: true, data });
     } catch (err) {
       next(err);
+    }
+  });
+
+  /** POST /dashboard/system/prisma-studio/session */
+  router.post('/system/prisma-studio/session', async (req, res) => {
+    if (!hasBearerAuthorization(req)) {
+      return res.status(401).json({
+        ok: false,
+        error: {
+          code: 'UNAUTHORIZED',
+          message: '인증이 필요합니다.',
+        },
+      });
+    }
+
+    const token = createPrismaStudioSessionToken();
+
+    return res.json({
+      ok: true,
+      data: {
+        launchUrl: `${PRISMA_STUDIO_BASE_URL}/launch?token=${token}`,
+        expiresInSec: PRISMA_STUDIO_SESSION_TTL_MS / 1000,
+      },
+    });
+  });
+
+  /** POST /dashboard/system/postgres-access/verify */
+  router.post('/system/postgres-access/verify', async (req, res) => {
+    const { password } = req.body || {};
+
+    if (!isValidSystemPassword(password)) {
+      return res.status(403).json({
+        ok: false,
+        error: {
+          code: 'FORBIDDEN',
+          message: '관리자 비밀번호가 올바르지 않습니다.',
+        },
+      });
+    }
+
+    return res.json({ ok: true, data: { verified: true } });
+  });
+
+  /** GET /dashboard/system/postgres-status */
+  router.get('/system/postgres-status', async (req, res) => {
+    const password = readSystemPassword(req);
+    if (!isValidSystemPassword(password)) {
+      return res.status(403).json({
+        ok: false,
+        error: {
+          code: 'FORBIDDEN',
+          message: '관리자 비밀번호가 필요합니다.',
+        },
+      });
+    }
+
+    const checkedAt = new Date().toISOString();
+
+    if (process.env.USE_INMEMORY === 'true') {
+      return res.json({
+        ok: true,
+        data: {
+          provider: 'postgresql',
+          mode: 'inmemory',
+          status: 'inmemory',
+          database: null,
+          version: null,
+          latencyMs: 0,
+          sizeBytes: null,
+          sizePretty: null,
+          tableCount: 0,
+          activeConnections: 0,
+          idleConnections: 0,
+          maxConnections: null,
+          checkedAt,
+          message: 'USE_INMEMORY=true 상태라 PostgreSQL 대신 InMemory 저장소를 사용 중입니다.',
+        },
+      });
+    }
+
+    try {
+      const startedAt = Date.now();
+      const [stats] = await prisma.$queryRawUnsafe(`
+        SELECT
+          current_database() AS database,
+          version() AS version,
+          pg_database_size(current_database())::bigint AS size_bytes,
+          pg_size_pretty(pg_database_size(current_database())) AS size_pretty,
+          current_setting('max_connections')::int AS max_connections,
+          (
+            SELECT COUNT(*)::int
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_type = 'BASE TABLE'
+          ) AS table_count,
+          (
+            SELECT COUNT(*)::int
+            FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND state = 'active'
+          ) AS active_connections,
+          (
+            SELECT COUNT(*)::int
+            FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND state = 'idle'
+          ) AS idle_connections
+      `);
+
+      return res.json({
+        ok: true,
+        data: {
+          provider: 'postgresql',
+          mode: 'postgres',
+          status: 'connected',
+          database: stats.database,
+          version: stats.version,
+          latencyMs: Date.now() - startedAt,
+          sizeBytes: Number(stats.size_bytes),
+          sizePretty: stats.size_pretty,
+          tableCount: Number(stats.table_count),
+          activeConnections: Number(stats.active_connections),
+          idleConnections: Number(stats.idle_connections),
+          maxConnections: Number(stats.max_connections),
+          checkedAt,
+          message: 'PostgreSQL 연결이 정상입니다.',
+        },
+      });
+    } catch (err) {
+      return res.status(503).json({
+        ok: false,
+        error: {
+          code: 'POSTGRES_UNAVAILABLE',
+          message: err?.message || 'PostgreSQL 상태를 확인할 수 없습니다.',
+        },
+      });
     }
   });
 
@@ -583,4 +779,7 @@ function createDashboardRouter(container) {
   return router;
 }
 
-module.exports = { createDashboardRouter };
+module.exports = {
+  createDashboardRouter,
+  hasValidPrismaStudioSession,
+};

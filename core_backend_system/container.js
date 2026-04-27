@@ -3,14 +3,12 @@ const pool = require('./DB/funcs/db_connection');
 
 const { resolveTenantFromReq } = require('./tenancy/tenantResolver');
 
-// preferred structure: presentation + usecase + adapters
 const { MysqlYangChunSttRepository } = require('./adapters/mysql/yangchunSttRepository');
 const { MysqlVisitCategoryRepository } = require('./adapters/mysql/visitCategoryRepository');
 const { MysqlWelfarePolicyRepository } = require('./adapters/mysql/welfarePolicyRepository');
 
 const { FlaskAiClient } = require('./adapters/ai/flaskAiClient');
 
-// usecases
 const { EnsureSummaryUsecase } = require('./usecases/ensureSummaryUsecase');
 const { EnsurePolicyRecommendationsUsecase } = require('./usecases/ensurePolicyRecommendationsUsecase');
 
@@ -76,7 +74,6 @@ function createContainer(options = {}) {
 
   const dashboardService = new DashboardService();
 
-  // MySQL repos — singleton (같은 pool 공유)
   const sttRepo = useInMemory ? new InMemoryYangChunSttRepository() : new MysqlYangChunSttRepository({ pool });
   const visitCategoryRepo = useInMemory
     ? new InMemoryVisitCategoryRepository()
