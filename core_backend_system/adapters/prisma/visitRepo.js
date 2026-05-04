@@ -1,7 +1,5 @@
 /**
- * PostgreSQL Visit Repository (Prisma)
- *
- * 인메모리 InMemoryVisitRepo를 대체합니다.
+ * PostgreSQL Visit Repository (Prisma) — ownerId 격리
  */
 
 class PrismaVisitRepo {
@@ -9,24 +7,15 @@ class PrismaVisitRepo {
     this.prisma = prisma;
   }
 
-  /**
-   * 대상자별 방문 기록 조회
-   */
-  async getVisitsByRecipientId(recipientId, filters = {}) {
-    const where = { recipientId };
+  async getVisitsByRecipientId(ownerId, recipientId, filters = {}) {
+    const where = { ownerId, recipientId };
 
-    if (filters.dateStart) {
-      where.visitDate = { ...(where.visitDate || {}), gte: new Date(filters.dateStart) };
-    }
-    if (filters.dateEnd) {
-      where.visitDate = { ...(where.visitDate || {}), lte: new Date(filters.dateEnd) };
-    }
+    if (filters.dateStart) where.visitDate = { ...(where.visitDate || {}), gte: new Date(filters.dateStart) };
+    if (filters.dateEnd) where.visitDate = { ...(where.visitDate || {}), lte: new Date(filters.dateEnd) };
 
     const visits = await this.prisma.visit.findMany({
       where,
-      include: {
-        manager: { select: { name: true } },
-      },
+      include: { manager: { select: { name: true } } },
       orderBy: { visitDate: 'desc' },
     });
 
@@ -41,13 +30,24 @@ class PrismaVisitRepo {
     }));
   }
 
-  /**
-   * 매니저 일정(방문/전화) 생성
-   */
-  async createVisitForManager(managerId, data) {
+  async createVisitForManager(ownerId, managerId, data) {
     const visitDate = new Date(data.visitDate);
     if (Number.isNaN(visitDate.getTime())) {
       throw new Error('visitDate is invalid');
+    }
+
+    // 본인 소유 매니저/대상자만 허용
+    const manager = await this.prisma.manager.findFirst({
+      where: { id: managerId, ownerId },
+    });
+    if (!manager) {
+      throw new Error('해당 매니저를 찾을 수 없거나 권한이 없습니다.');
+    }
+    const recipient = await this.prisma.recipient.findFirst({
+      where: { id: data.recipientId, ownerId },
+    });
+    if (!recipient) {
+      throw new Error('해당 대상자를 찾을 수 없거나 권한이 없습니다.');
     }
 
     const visitType = data.visitType === 'call' ? 'call' : 'visit';
@@ -56,6 +56,7 @@ class PrismaVisitRepo {
       data: {
         managerId,
         recipientId: data.recipientId,
+        ownerId,
         visitDate,
         visitType,
         summary: data.summary || '일정 등록',

@@ -1,8 +1,7 @@
 /**
  * PostgreSQL Dashboard Repository (Prisma)
  *
- * 인메모리 InMemoryDashboardRepo를 대체합니다.
- * 동일한 메서드 시그니처를 유지하므로 Router 변경 없이 교체 가능.
+ * 모든 메서드에 ownerId 가 필수. 호출자(router)가 req.user.id 를 넘긴다.
  */
 
 class PrismaDashboardRepo {
@@ -11,34 +10,27 @@ class PrismaDashboardRepo {
   }
 
   /**
-   * 대시보드 KPI 조회
-   * 오늘 날짜 스냅샷이 없으면 실시간 집계 fallback
+   * 대시보드 KPI 조회 (계정별)
    */
-  async getKPI() {
+  async getKPI(ownerId) {
     const today = new Date(new Date().toISOString().split('T')[0]);
 
-    // 오늘의 KPI 스냅샷 조회
     let kpi = await this.prisma.dashboardKPI.findUnique({
-      where: { date: today },
+      where: { date_ownerId: { date: today, ownerId } },
     });
 
     if (!kpi) {
-      // 스냅샷이 없으면 실시간 집계
       const todayStart = new Date(today);
       const todayEnd = new Date(today);
       todayEnd.setDate(todayEnd.getDate() + 1);
 
       const [todayVisits, pendingReports, approvedCount, totalRecipients] = await Promise.all([
         this.prisma.visit.count({
-          where: { visitDate: { gte: todayStart, lt: todayEnd } },
+          where: { ownerId, visitDate: { gte: todayStart, lt: todayEnd } },
         }),
-        this.prisma.careLog.count({
-          where: { status: 'pending' },
-        }),
-        this.prisma.careLog.count({
-          where: { status: 'approved' },
-        }),
-        this.prisma.recipient.count(),
+        this.prisma.careLog.count({ where: { ownerId, status: 'pending' } }),
+        this.prisma.careLog.count({ where: { ownerId, status: 'approved' } }),
+        this.prisma.recipient.count({ where: { ownerId } }),
       ]);
 
       kpi = { todayVisits, pendingReports, approvedCount, totalRecipients };
@@ -80,11 +72,9 @@ class PrismaDashboardRepo {
     };
   }
 
-  /**
-   * 최근 보고서 목록
-   */
-  async getRecentReports(limit = 5) {
+  async getRecentReports(ownerId, limit = 5) {
     const logs = await this.prisma.careLog.findMany({
+      where: { ownerId },
       orderBy: { createdAt: 'desc' },
       take: limit,
       include: {
@@ -103,17 +93,17 @@ class PrismaDashboardRepo {
     }));
   }
 
-  /**
-   * 알림 목록
-   */
-  async getNotifications(limit = 4) {
+  async getNotifications(ownerId, limit = 4) {
     const notifs = await this.prisma.notification.findMany({
+      where: { ownerId },
       orderBy: { createdAt: 'desc' },
       take: limit,
     });
 
     return notifs.map((n) => {
-      const isReport = /report|보고서|리포트/i.test(`${n.title} ${n.content}`) || String(n.link || '').includes('/care-logs');
+      const isReport =
+        /report|보고서|리포트/i.test(`${n.title} ${n.content}`) ||
+        String(n.link || '').includes('/care-logs');
       return {
         id: n.id,
         title: n.title,
@@ -128,9 +118,9 @@ class PrismaDashboardRepo {
   }
 
   /**
-   * 복지 뉴스 (임시: 백엔드 제공형 정적 피드)
+   * 복지 뉴스 (정적 피드 — 전역 reference data)
    */
-  async getWelfareNews(limit = 10) {
+  async getWelfareNews(_ownerId, limit = 10) {
     const items = [
       {
         id: 'welfare-001',
@@ -157,12 +147,9 @@ class PrismaDashboardRepo {
     return items.slice(0, limit);
   }
 
-  /**
-   * 업무 요청 (긴급/대기 상태의 최근 돌봄 일지 기반)
-   */
-  async getTasks(limit = 10) {
+  async getTasks(ownerId, limit = 10) {
     const logs = await this.prisma.careLog.findMany({
-      where: { status: { in: ['urgent', 'pending'] } },
+      where: { ownerId, status: { in: ['urgent', 'pending'] } },
       orderBy: { createdAt: 'desc' },
       take: limit,
       include: {
@@ -182,9 +169,9 @@ class PrismaDashboardRepo {
   }
 
   /**
-   * 공지사항 (임시: 백엔드 제공형 정적 피드)
+   * 공지사항 (정적 피드 — 전역)
    */
-  async getNotices(limit = 10) {
+  async getNotices(_ownerId, limit = 10) {
     const items = [
       { id: 'notice-001', title: '4월 전체 매니저 회의 안내', date: '2026.03.15', isNew: true },
       { id: 'notice-002', title: '돌봄 기록 시스템 업데이트 안내', date: '2026.03.12', isNew: false },

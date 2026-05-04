@@ -1,3 +1,6 @@
+-- CreateSchema
+CREATE SCHEMA IF NOT EXISTS "public";
+
 -- CreateTable
 CREATE TABLE "users" (
     "id" TEXT NOT NULL,
@@ -39,6 +42,7 @@ CREATE TABLE "managers" (
     "status" TEXT NOT NULL DEFAULT 'active',
     "startDate" TIMESTAMP(3),
     "centerId" TEXT NOT NULL,
+    "ownerId" TEXT NOT NULL,
     "recipientCount" INTEGER NOT NULL DEFAULT 0,
     "monthlyVisits" INTEGER NOT NULL DEFAULT 0,
 
@@ -65,6 +69,7 @@ CREATE TABLE "recipients" (
     "phone" TEXT,
     "careStartDate" TIMESTAMP(3),
     "managerId" TEXT,
+    "ownerId" TEXT NOT NULL,
     "healthInfo" JSONB,
     "emergencyContact" JSONB,
     "visitCount" INTEGER NOT NULL DEFAULT 0,
@@ -82,6 +87,7 @@ CREATE TABLE "care_logs" (
     "recipientId" TEXT NOT NULL,
     "managerId" TEXT NOT NULL,
     "centerId" TEXT,
+    "ownerId" TEXT NOT NULL,
     "visitDate" TIMESTAMP(3) NOT NULL,
     "visitType" TEXT DEFAULT 'visit',
     "visitLocation" TEXT,
@@ -117,6 +123,7 @@ CREATE TABLE "visits" (
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "recipientId" TEXT NOT NULL,
     "managerId" TEXT NOT NULL,
+    "ownerId" TEXT NOT NULL,
     "careLogId" TEXT,
 
     CONSTRAINT "visits_pkey" PRIMARY KEY ("id")
@@ -130,6 +137,7 @@ CREATE TABLE "memos" (
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "recipientId" TEXT NOT NULL,
     "authorId" TEXT NOT NULL,
+    "ownerId" TEXT NOT NULL,
 
     CONSTRAINT "memos_pkey" PRIMARY KEY ("id")
 );
@@ -164,6 +172,7 @@ CREATE TABLE "dashboard_kpi" (
     "approvedCount" INTEGER NOT NULL DEFAULT 0,
     "totalRecipients" INTEGER NOT NULL DEFAULT 0,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "ownerId" TEXT NOT NULL,
 
     CONSTRAINT "dashboard_kpi_pkey" PRIMARY KEY ("id")
 );
@@ -177,6 +186,7 @@ CREATE TABLE "notifications" (
     "link" TEXT,
     "icon" TEXT DEFAULT 'info',
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "ownerId" TEXT NOT NULL,
 
     CONSTRAINT "notifications_pkey" PRIMARY KEY ("id")
 );
@@ -191,19 +201,70 @@ CREATE UNIQUE INDEX "centers_name_key" ON "centers"("name");
 CREATE UNIQUE INDEX "dongs_name_key" ON "dongs"("name");
 
 -- CreateIndex
+CREATE INDEX "managers_centerId_idx" ON "managers"("centerId");
+
+-- CreateIndex
+CREATE INDEX "managers_ownerId_idx" ON "managers"("ownerId");
+
+-- CreateIndex
+CREATE INDEX "recipients_managerId_idx" ON "recipients"("managerId");
+
+-- CreateIndex
+CREATE INDEX "recipients_dongId_idx" ON "recipients"("dongId");
+
+-- CreateIndex
+CREATE INDEX "recipients_ownerId_idx" ON "recipients"("ownerId");
+
+-- CreateIndex
+CREATE INDEX "care_logs_recipientId_idx" ON "care_logs"("recipientId");
+
+-- CreateIndex
+CREATE INDEX "care_logs_managerId_idx" ON "care_logs"("managerId");
+
+-- CreateIndex
+CREATE INDEX "care_logs_ownerId_idx" ON "care_logs"("ownerId");
+
+-- CreateIndex
+CREATE INDEX "feedbacks_careLogId_idx" ON "feedbacks"("careLogId");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "visits_careLogId_key" ON "visits"("careLogId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "dashboard_kpi_date_key" ON "dashboard_kpi"("date");
+CREATE INDEX "visits_recipientId_idx" ON "visits"("recipientId");
+
+-- CreateIndex
+CREATE INDEX "visits_managerId_idx" ON "visits"("managerId");
+
+-- CreateIndex
+CREATE INDEX "visits_ownerId_idx" ON "visits"("ownerId");
+
+-- CreateIndex
+CREATE INDEX "memos_recipientId_idx" ON "memos"("recipientId");
+
+-- CreateIndex
+CREATE INDEX "memos_ownerId_idx" ON "memos"("ownerId");
+
+-- CreateIndex
+CREATE INDEX "dashboard_kpi_ownerId_idx" ON "dashboard_kpi"("ownerId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "dashboard_kpi_date_ownerId_key" ON "dashboard_kpi"("date", "ownerId");
+
+-- CreateIndex
+CREATE INDEX "notifications_ownerId_idx" ON "notifications"("ownerId");
 
 -- AddForeignKey
 ALTER TABLE "managers" ADD CONSTRAINT "managers_centerId_fkey" FOREIGN KEY ("centerId") REFERENCES "centers"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "manager_dongs" ADD CONSTRAINT "manager_dongs_managerId_fkey" FOREIGN KEY ("managerId") REFERENCES "managers"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "managers" ADD CONSTRAINT "managers_ownerId_fkey" FOREIGN KEY ("ownerId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "manager_dongs" ADD CONSTRAINT "manager_dongs_dongId_fkey" FOREIGN KEY ("dongId") REFERENCES "dongs"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "manager_dongs" ADD CONSTRAINT "manager_dongs_managerId_fkey" FOREIGN KEY ("managerId") REFERENCES "managers"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "manager_dongs" ADD CONSTRAINT "manager_dongs_dongId_fkey" FOREIGN KEY ("dongId") REFERENCES "dongs"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "recipients" ADD CONSTRAINT "recipients_dongId_fkey" FOREIGN KEY ("dongId") REFERENCES "dongs"("id") ON DELETE SET NULL ON UPDATE CASCADE;
@@ -212,37 +273,56 @@ ALTER TABLE "recipients" ADD CONSTRAINT "recipients_dongId_fkey" FOREIGN KEY ("d
 ALTER TABLE "recipients" ADD CONSTRAINT "recipients_managerId_fkey" FOREIGN KEY ("managerId") REFERENCES "managers"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "care_logs" ADD CONSTRAINT "care_logs_recipientId_fkey" FOREIGN KEY ("recipientId") REFERENCES "recipients"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "recipients" ADD CONSTRAINT "recipients_ownerId_fkey" FOREIGN KEY ("ownerId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "care_logs" ADD CONSTRAINT "care_logs_managerId_fkey" FOREIGN KEY ("managerId") REFERENCES "managers"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "care_logs" ADD CONSTRAINT "care_logs_recipientId_fkey" FOREIGN KEY ("recipientId") REFERENCES "recipients"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "care_logs" ADD CONSTRAINT "care_logs_managerId_fkey" FOREIGN KEY ("managerId") REFERENCES "managers"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "care_logs" ADD CONSTRAINT "care_logs_centerId_fkey" FOREIGN KEY ("centerId") REFERENCES "centers"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "feedbacks" ADD CONSTRAINT "feedbacks_careLogId_fkey" FOREIGN KEY ("careLogId") REFERENCES "care_logs"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "care_logs" ADD CONSTRAINT "care_logs_ownerId_fkey" FOREIGN KEY ("ownerId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "feedbacks" ADD CONSTRAINT "feedbacks_careLogId_fkey" FOREIGN KEY ("careLogId") REFERENCES "care_logs"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "feedbacks" ADD CONSTRAINT "feedbacks_authorId_fkey" FOREIGN KEY ("authorId") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "visits" ADD CONSTRAINT "visits_recipientId_fkey" FOREIGN KEY ("recipientId") REFERENCES "recipients"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "visits" ADD CONSTRAINT "visits_recipientId_fkey" FOREIGN KEY ("recipientId") REFERENCES "recipients"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "visits" ADD CONSTRAINT "visits_managerId_fkey" FOREIGN KEY ("managerId") REFERENCES "managers"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "visits" ADD CONSTRAINT "visits_managerId_fkey" FOREIGN KEY ("managerId") REFERENCES "managers"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "visits" ADD CONSTRAINT "visits_ownerId_fkey" FOREIGN KEY ("ownerId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "visits" ADD CONSTRAINT "visits_careLogId_fkey" FOREIGN KEY ("careLogId") REFERENCES "care_logs"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "memos" ADD CONSTRAINT "memos_recipientId_fkey" FOREIGN KEY ("recipientId") REFERENCES "recipients"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "memos" ADD CONSTRAINT "memos_recipientId_fkey" FOREIGN KEY ("recipientId") REFERENCES "recipients"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "memos" ADD CONSTRAINT "memos_authorId_fkey" FOREIGN KEY ("authorId") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "recipient_policies" ADD CONSTRAINT "recipient_policies_recipientId_fkey" FOREIGN KEY ("recipientId") REFERENCES "recipients"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "memos" ADD CONSTRAINT "memos_ownerId_fkey" FOREIGN KEY ("ownerId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "recipient_policies" ADD CONSTRAINT "recipient_policies_policyId_fkey" FOREIGN KEY ("policyId") REFERENCES "policies"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "recipient_policies" ADD CONSTRAINT "recipient_policies_recipientId_fkey" FOREIGN KEY ("recipientId") REFERENCES "recipients"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "recipient_policies" ADD CONSTRAINT "recipient_policies_policyId_fkey" FOREIGN KEY ("policyId") REFERENCES "policies"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "dashboard_kpi" ADD CONSTRAINT "dashboard_kpi_ownerId_fkey" FOREIGN KEY ("ownerId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "notifications" ADD CONSTRAINT "notifications_ownerId_fkey" FOREIGN KEY ("ownerId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+

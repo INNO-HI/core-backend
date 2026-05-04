@@ -1,7 +1,8 @@
 /**
  * PostgreSQL Policy Repository (Prisma)
  *
- * 인메모리 InMemoryPolicyRepo를 대체합니다.
+ * Policy 카탈로그 자체는 전역(reference data)이지만,
+ * RecipientPolicy 는 Recipient 의 ownerId 를 통해 격리된다.
  */
 
 class PrismaPolicyRepo {
@@ -9,10 +10,17 @@ class PrismaPolicyRepo {
     this.prisma = prisma;
   }
 
-  /**
-   * 대상자 맞춤 정책 추천 조회
-   */
-  async getPoliciesForRecipient(recipientId) {
+  async _assertRecipientOwnership(ownerId, recipientId) {
+    const r = await this.prisma.recipient.findFirst({
+      where: { id: recipientId, ownerId },
+      select: { id: true },
+    });
+    if (!r) throw new Error('해당 대상자를 찾을 수 없거나 권한이 없습니다.');
+  }
+
+  async getPoliciesForRecipient(ownerId, recipientId) {
+    await this._assertRecipientOwnership(ownerId, recipientId);
+
     const rps = await this.prisma.recipientPolicy.findMany({
       where: { recipientId },
       include: { policy: true },
@@ -30,7 +38,6 @@ class PrismaPolicyRepo {
       }));
     }
 
-    // 연결된 정책이 없으면 모든 정책을 점수 0으로 반환
     const allPolicies = await this.prisma.policy.findMany();
     return allPolicies.map((p) => ({
       id: p.id,
@@ -42,11 +49,9 @@ class PrismaPolicyRepo {
     }));
   }
 
-  /**
-   * 정책 추천 새로고침 (점수 재계산)
-   */
-  async refreshPolicies(recipientId) {
-    // 기존 연결의 점수를 약간 랜덤으로 조정
+  async refreshPolicies(ownerId, recipientId) {
+    await this._assertRecipientOwnership(ownerId, recipientId);
+
     const existing = await this.prisma.recipientPolicy.findMany({
       where: { recipientId },
       include: { policy: true },
@@ -56,16 +61,13 @@ class PrismaPolicyRepo {
       const newScore = Math.max(50, Math.min(100, rp.matchScore + Math.floor(Math.random() * 11) - 5));
       await this.prisma.recipientPolicy.update({
         where: {
-          recipientId_policyId: {
-            recipientId: rp.recipientId,
-            policyId: rp.policyId,
-          },
+          recipientId_policyId: { recipientId: rp.recipientId, policyId: rp.policyId },
         },
         data: { matchScore: newScore },
       });
     }
 
-    return this.getPoliciesForRecipient(recipientId);
+    return this.getPoliciesForRecipient(ownerId, recipientId);
   }
 }
 

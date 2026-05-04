@@ -1,7 +1,5 @@
 /**
- * PostgreSQL Recipient Repository (Prisma)
- *
- * 인메모리 InMemoryRecipientRepo를 대체합니다.
+ * PostgreSQL Recipient Repository (Prisma) — ownerId 격리
  */
 
 class PrismaRecipientRepo {
@@ -9,15 +7,10 @@ class PrismaRecipientRepo {
     this.prisma = prisma;
   }
 
-  /**
-   * 대상자 목록 조회 (필터)
-   */
-  async getRecipients(filters) {
-    const where = {};
+  async getRecipients(ownerId, filters) {
+    const where = { ownerId };
 
-    if (filters.status && filters.status !== 'all') {
-      where.status = filters.status;
-    }
+    if (filters.status && filters.status !== 'all') where.status = filters.status;
 
     if (filters.search) {
       const s = filters.search;
@@ -28,21 +21,15 @@ class PrismaRecipientRepo {
       ];
     }
 
-    if (filters.dong && filters.dong !== 'all') {
-      where.dong = { name: filters.dong };
-    }
+    if (filters.dong && filters.dong !== 'all') where.dong = { name: filters.dong };
+    if (filters.manager && filters.manager !== 'all') where.manager = { name: filters.manager };
 
-    if (filters.manager && filters.manager !== 'all') {
-      where.manager = { name: filters.manager };
-    }
-
-    // 상태별 카운트 (전체 기준)
     const [allCount, normalCount, cautionCount, urgentCount, unvisitedCount] = await Promise.all([
-      this.prisma.recipient.count(),
-      this.prisma.recipient.count({ where: { status: 'normal' } }),
-      this.prisma.recipient.count({ where: { status: 'caution' } }),
-      this.prisma.recipient.count({ where: { status: 'urgent' } }),
-      this.prisma.recipient.count({ where: { status: 'unvisited' } }),
+      this.prisma.recipient.count({ where: { ownerId } }),
+      this.prisma.recipient.count({ where: { ownerId, status: 'normal' } }),
+      this.prisma.recipient.count({ where: { ownerId, status: 'caution' } }),
+      this.prisma.recipient.count({ where: { ownerId, status: 'urgent' } }),
+      this.prisma.recipient.count({ where: { ownerId, status: 'unvisited' } }),
     ]);
 
     const statusCounts = {
@@ -80,26 +67,20 @@ class PrismaRecipientRepo {
     };
   }
 
-  /**
-   * 대상자 KPI
-   */
-  async getKPIs() {
+  async getKPIs(ownerId) {
     const [total, normal, caution, urgent, unvisited] = await Promise.all([
-      this.prisma.recipient.count(),
-      this.prisma.recipient.count({ where: { status: 'normal' } }),
-      this.prisma.recipient.count({ where: { status: 'caution' } }),
-      this.prisma.recipient.count({ where: { status: 'urgent' } }),
-      this.prisma.recipient.count({ where: { status: 'unvisited' } }),
+      this.prisma.recipient.count({ where: { ownerId } }),
+      this.prisma.recipient.count({ where: { ownerId, status: 'normal' } }),
+      this.prisma.recipient.count({ where: { ownerId, status: 'caution' } }),
+      this.prisma.recipient.count({ where: { ownerId, status: 'urgent' } }),
+      this.prisma.recipient.count({ where: { ownerId, status: 'unvisited' } }),
     ]);
     return { total, normal, caution, urgent, unvisited };
   }
 
-  /**
-   * 대상자 상세 조회
-   */
-  async getRecipientById(id) {
-    const r = await this.prisma.recipient.findUnique({
-      where: { id },
+  async getRecipientById(ownerId, id) {
+    const r = await this.prisma.recipient.findFirst({
+      where: { id, ownerId },
       include: {
         dong: { select: { name: true } },
         manager: { select: { id: true, name: true, phone: true, center: { select: { name: true } } } },
@@ -121,7 +102,6 @@ class PrismaRecipientRepo {
 
     if (!r) return null;
 
-    // 월별 방문 통계 (최근 6개월) — 병렬 실행
     const now = new Date();
     const monthPromises = [];
     for (let i = 5; i >= 0; i--) {
@@ -129,24 +109,25 @@ class PrismaRecipientRepo {
       const nextMonth = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
       const monthName = `${monthDate.getMonth() + 1}월`;
       monthPromises.push(
-        this.prisma.visit.count({
-          where: {
-            recipientId: id,
-            visitDate: { gte: monthDate, lt: nextMonth },
-          },
-        }).then((count) => ({ month: monthName, count }))
+        this.prisma.visit
+          .count({
+            where: {
+              ownerId,
+              recipientId: id,
+              visitDate: { gte: monthDate, lt: nextMonth },
+            },
+          })
+          .then((count) => ({ month: monthName, count }))
       );
     }
     const monthlyVisits = await Promise.all(monthPromises);
 
-    // 긴급 이력 횟수
     const urgentHistory = await this.prisma.careLog.count({
-      where: { recipientId: id, status: 'urgent' },
+      where: { ownerId, recipientId: id, status: 'urgent' },
     });
 
-    // 총 보고서 수
     const totalReports = await this.prisma.careLog.count({
-      where: { recipientId: id },
+      where: { ownerId, recipientId: id },
     });
 
     return {

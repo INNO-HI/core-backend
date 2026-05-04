@@ -1,95 +1,107 @@
 /**
- * Dashboard Service
- * 인증 및 비즈니스 로직 담당 (Service 레이어)
+ * Dashboard Service – 인증 (Auth)
  *
- * 현재는 인메모리 mock 데이터로 동작.
- * DB 연동 시 이 서비스의 메서드를 MySQL 어댑터로 교체하면 됨.
+ * Prisma `User` 테이블을 사용하는 진짜 인증 구현.
+ *  - register: bcrypt 해시 + Prisma 저장 + JWT 발급
+ *  - login   : bcrypt 비교 + JWT 발급
+ *  - 토큰은 7일 만료 (JWT_EXPIRES_IN)
+ *
+ * 잠금 카운터는 in-memory(서버 1대 환경 가정). 분산 환경에서는 Redis 등으로 교체.
  */
 
-// Mock 사용자 DB
-const users = [
-  {
-    id: '1',
-    email: 'test@safehi.kr',
-    password: 'Test1234!',
-    name: '김테스트',
-    phone: '010-1234-5678',
-    role: 'manager',
-    emailVerified: true,
-    createdAt: '2024-01-01T00:00:00.000Z',
-  },
-  {
-    id: '2',
-    email: 'admin@safehi.kr',
-    password: 'Admin1234!',
-    name: '김담당',
-    phone: '010-9999-8888',
-    role: 'admin',
-    emailVerified: true,
-    createdAt: '2024-01-01T00:00:00.000Z',
-  },
-];
+const { prisma } = require('../lib/prisma');
+const { signToken, hashPassword, comparePassword } = require('../lib/auth');
 
 const loginAttempts = {};
 
-class DashboardService {
-  async login({ email, password, rememberMe }) {
-    const normalizedEmail = email.toLowerCase();
+function buildToken(user) {
+  return signToken({ userId: user.id, email: user.email, role: user.role });
+}
 
-    // 계정 잠금 확인
+function safeUser(user) {
+  // password 제거
+  const { password: _omit, ...rest } = user;
+  return {
+    ...rest,
+    createdAt: rest.createdAt instanceof Date ? rest.createdAt.toISOString() : rest.createdAt,
+    updatedAt: rest.updatedAt instanceof Date ? rest.updatedAt.toISOString() : rest.updatedAt,
+  };
+}
+
+class DashboardService {
+  async login({ email, password }) {
+    const normalizedEmail = String(email || '').toLowerCase();
+
     const attempts = loginAttempts[normalizedEmail];
     if (attempts?.lockedUntil && new Date(attempts.lockedUntil) > new Date()) {
       return { success: false, error: '계정이 일시적으로 잠겼습니다. 잠시 후 다시 시도해주세요.' };
     }
 
-    const user = users.find((u) => u.email === normalizedEmail);
-    if (user && user.password === password) {
-      delete loginAttempts[normalizedEmail];
-      const { password: _, ...safeUser } = user;
+    const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+    if (!user) {
+      this._recordFailure(normalizedEmail);
+      return { success: false, error: '이메일 또는 비밀번호가 올바르지 않습니다.' };
+    }
+
+    const ok = await comparePassword(password, user.password);
+    if (!ok) {
+      const locked = this._recordFailure(normalizedEmail);
       return {
-        success: true,
-        data: {
-          user: safeUser,
-          token: 'jwt-token-' + Date.now(),
-        },
+        success: false,
+        error: locked
+          ? '로그인 시도가 5회 초과되어 계정이 5분간 잠겼습니다.'
+          : '이메일 또는 비밀번호가 올바르지 않습니다.',
       };
     }
 
-    // 실패 카운트
-    if (!loginAttempts[normalizedEmail]) {
-      loginAttempts[normalizedEmail] = { count: 0 };
-    }
-    loginAttempts[normalizedEmail].count++;
+    delete loginAttempts[normalizedEmail];
+    return {
+      success: true,
+      data: { user: safeUser(user), token: buildToken(user) },
+    };
+  }
 
-    if (loginAttempts[normalizedEmail].count >= 5) {
-      loginAttempts[normalizedEmail].lockedUntil = new Date(Date.now() + 5 * 60 * 1000).toISOString();
-      return { success: false, error: '로그인 시도가 5회 초과되어 계정이 5분간 잠겼습니다.' };
+  _recordFailure(email) {
+    if (!loginAttempts[email]) loginAttempts[email] = { count: 0 };
+    loginAttempts[email].count++;
+    if (loginAttempts[email].count >= 5) {
+      loginAttempts[email].lockedUntil = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+      return true;
     }
-
-    return { success: false, error: '이메일 또는 비밀번호가 올바르지 않습니다.' };
+    return false;
   }
 
   async register(data) {
-    const normalizedEmail = (data.email || '').toLowerCase();
+    const normalizedEmail = String(data.email || '').toLowerCase();
+    const password = data.password;
+    if (!normalizedEmail || !password) {
+      return { success: false, error: '이메일과 비밀번호는 필수입니다.' };
+    }
+    if (password.length < 6) {
+      return { success: false, error: '비밀번호는 6자 이상이어야 합니다.' };
+    }
 
-    if (users.some((u) => u.email === normalizedEmail)) {
+    const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+    if (existing) {
       return { success: false, error: '이미 사용 중인 이메일입니다.' };
     }
 
-    const newUser = {
-      id: String(users.length + 1),
-      email: normalizedEmail,
-      password: data.password,
-      name: data.name,
-      phone: data.phone,
-      role: 'user',
-      emailVerified: false,
-      createdAt: new Date().toISOString(),
-    };
+    const hashed = await hashPassword(password);
+    const created = await prisma.user.create({
+      data: {
+        email: normalizedEmail,
+        password: hashed,
+        name: data.name || normalizedEmail.split('@')[0],
+        phone: data.phone || null,
+        role: 'user',
+        emailVerified: false,
+      },
+    });
 
-    users.push(newUser);
-    const { password: _, ...safeUser } = newUser;
-    return { success: true, data: { user: safeUser } };
+    return {
+      success: true,
+      data: { user: safeUser(created), token: buildToken(created) },
+    };
   }
 
   async forgotPassword(_data) {
@@ -103,41 +115,40 @@ class DashboardService {
       return { success: false, error: '비밀번호는 6자 이상이어야 합니다.' };
     }
 
-    // 토큰 방식 재설정
     if (data.token) {
-      if (data.token.length < 10) {
+      // 실제 토큰 발급 플로우는 미구현 – 길이만 검증하는 데모 로직 유지
+      if (String(data.token).length < 10) {
         return { success: false, error: '유효하지 않거나 만료된 링크입니다.' };
       }
       return { success: true };
     }
 
-    // 이메일 기반 재설정(모바일 앱 단순 플로우)
-    const normalizedEmail = (data.email || '').toLowerCase();
+    const normalizedEmail = String(data.email || '').toLowerCase();
     if (!normalizedEmail) {
       return { success: false, error: '이메일 정보가 필요합니다.' };
     }
 
-    const user = users.find((u) => u.email === normalizedEmail);
+    const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
     if (!user) {
       return { success: false, error: '가입된 계정을 찾을 수 없습니다.' };
     }
 
-    user.password = nextPassword;
+    const hashed = await hashPassword(nextPassword);
+    await prisma.user.update({ where: { id: user.id }, data: { password: hashed } });
     return { success: true };
   }
 
   async sendEmailVerification(email) {
-    const normalizedEmail = (email || '').toLowerCase();
-    if (users.some((u) => u.email === normalizedEmail)) {
+    const normalizedEmail = String(email || '').toLowerCase();
+    const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+    if (existing) {
       return { success: false, error: '이미 사용 중인 이메일입니다.' };
     }
     return { success: true, data: { code: '123456' } };
   }
 
   async verifyEmailCode(_email, code) {
-    if (code === '123456') {
-      return { success: true };
-    }
+    if (code === '123456') return { success: true };
     return { success: false, error: '인증 코드가 올바르지 않습니다.' };
   }
 
@@ -145,9 +156,9 @@ class DashboardService {
     return { success: true, data: { requestId: 'req-' + Date.now() } };
   }
 
-  async deleteAccount({ userId, reason }) {
-    const idx = users.findIndex((u) => u.id === userId);
-    if (idx !== -1) users.splice(idx, 1);
+  async deleteAccount({ userId }) {
+    if (!userId) return { success: true };
+    await prisma.user.delete({ where: { id: userId } }).catch(() => null);
     return { success: true };
   }
 }

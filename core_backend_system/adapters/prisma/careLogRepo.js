@@ -1,7 +1,5 @@
 /**
- * PostgreSQL Care Log Repository (Prisma)
- *
- * 인메모리 InMemoryCareLogRepo를 대체합니다.
+ * PostgreSQL Care Log Repository (Prisma) — ownerId 격리
  */
 
 class PrismaCareLogRepo {
@@ -9,15 +7,10 @@ class PrismaCareLogRepo {
     this.prisma = prisma;
   }
 
-  /**
-   * 돌봄 일지 목록 조회 (필터 + 페이징)
-   */
-  async getCareLogs(filters, page = 1, pageSize = 10) {
-    const where = {};
+  async getCareLogs(ownerId, filters, page = 1, pageSize = 10) {
+    const where = { ownerId };
 
-    if (filters.status && filters.status !== 'all') {
-      where.status = filters.status;
-    }
+    if (filters.status && filters.status !== 'all') where.status = filters.status;
 
     if (filters.search) {
       const s = filters.search;
@@ -28,27 +21,19 @@ class PrismaCareLogRepo {
       ];
     }
 
-    if (filters.dateStart) {
-      where.visitDate = { ...(where.visitDate || {}), gte: new Date(filters.dateStart) };
-    }
-    if (filters.dateEnd) {
-      where.visitDate = { ...(where.visitDate || {}), lte: new Date(filters.dateEnd) };
-    }
+    if (filters.dateStart) where.visitDate = { ...(where.visitDate || {}), gte: new Date(filters.dateStart) };
+    if (filters.dateEnd) where.visitDate = { ...(where.visitDate || {}), lte: new Date(filters.dateEnd) };
 
     if (filters.dong && filters.dong !== 'all') {
-      where.recipient = {
-        ...(where.recipient || {}),
-        dong: { name: filters.dong },
-      };
+      where.recipient = { ...(where.recipient || {}), dong: { name: filters.dong } };
     }
 
-    // 상태별 카운트 (전체 데이터 기준)
     const [allCount, pendingCount, urgentCount, approvedCount, rejectedCount] = await Promise.all([
-      this.prisma.careLog.count(),
-      this.prisma.careLog.count({ where: { status: 'pending' } }),
-      this.prisma.careLog.count({ where: { status: 'urgent' } }),
-      this.prisma.careLog.count({ where: { status: 'approved' } }),
-      this.prisma.careLog.count({ where: { status: 'rejected' } }),
+      this.prisma.careLog.count({ where: { ownerId } }),
+      this.prisma.careLog.count({ where: { ownerId, status: 'pending' } }),
+      this.prisma.careLog.count({ where: { ownerId, status: 'urgent' } }),
+      this.prisma.careLog.count({ where: { ownerId, status: 'approved' } }),
+      this.prisma.careLog.count({ where: { ownerId, status: 'rejected' } }),
     ]);
 
     const statusCounts = {
@@ -88,22 +73,12 @@ class PrismaCareLogRepo {
     };
   }
 
-  /**
-   * 대상자별 돌봄 일지 목록 조회
-   */
-  async getCareLogsByRecipientId(recipientId, filters = {}, page = 1, pageSize = 20) {
-    const where = { recipientId };
+  async getCareLogsByRecipientId(ownerId, recipientId, filters = {}, page = 1, pageSize = 20) {
+    const where = { ownerId, recipientId };
 
-    if (filters.status && filters.status !== 'all') {
-      where.status = filters.status;
-    }
-
-    if (filters.dateStart) {
-      where.visitDate = { ...(where.visitDate || {}), gte: new Date(filters.dateStart) };
-    }
-    if (filters.dateEnd) {
-      where.visitDate = { ...(where.visitDate || {}), lte: new Date(filters.dateEnd) };
-    }
+    if (filters.status && filters.status !== 'all') where.status = filters.status;
+    if (filters.dateStart) where.visitDate = { ...(where.visitDate || {}), gte: new Date(filters.dateStart) };
+    if (filters.dateEnd) where.visitDate = { ...(where.visitDate || {}), lte: new Date(filters.dateEnd) };
 
     const totalCount = await this.prisma.careLog.count({ where });
     const logs = await this.prisma.careLog.findMany({
@@ -136,20 +111,15 @@ class PrismaCareLogRepo {
     };
   }
 
-  /**
-   * 돌봄 일지 상세 조회
-   */
-  async getCareLogById(id) {
-    const log = await this.prisma.careLog.findUnique({
-      where: { id },
+  async getCareLogById(ownerId, id) {
+    const log = await this.prisma.careLog.findFirst({
+      where: { id, ownerId },
       include: {
         recipient: { select: { id: true, name: true } },
         manager: { select: { name: true } },
         center: { select: { name: true } },
         feedbacks: {
-          include: {
-            author: { select: { id: true, name: true } },
-          },
+          include: { author: { select: { id: true, name: true } } },
           orderBy: { createdAt: 'asc' },
         },
       },
@@ -189,50 +159,44 @@ class PrismaCareLogRepo {
     };
   }
 
-  /**
-   * 일괄 상태 변경
-   */
-  async updateBulkStatus(ids, status) {
+  async updateBulkStatus(ownerId, ids, status) {
     const result = await this.prisma.careLog.updateMany({
-      where: { id: { in: ids } },
+      where: { id: { in: ids }, ownerId },
       data: { status },
     });
     return { success: true, count: result.count };
   }
 
-  /**
-   * 개별 상태 변경
-   */
-  async updateStatus(id, status, reason) {
+  async updateStatus(ownerId, id, status, reason) {
     const data = { status };
     if (reason) data.rejectionReason = reason;
 
-    await this.prisma.careLog.update({
-      where: { id },
+    const result = await this.prisma.careLog.updateMany({
+      where: { id, ownerId },
       data,
     });
+
+    if (result.count === 0) {
+      throw new Error('해당 돌봄 일지를 찾을 수 없거나 권한이 없습니다.');
+    }
 
     return { success: true, id, newStatus: status };
   }
 
-  /**
-   * 피드백 추가
-   */
-  async addFeedback(careLogId, content) {
-    // 기본 작성자 (admin) 조회
-    const author = await this.prisma.user.findFirst({
-      where: { role: 'admin' },
+  async addFeedback(ownerId, careLogId, content, authorId, authorRole) {
+    // 본인 소유 careLog 인지 확인
+    const careLog = await this.prisma.careLog.findFirst({
+      where: { id: careLogId, ownerId },
     });
-
-    if (!author) {
-      throw new Error('피드백을 작성할 관리자 계정이 존재하지 않습니다. 시드 데이터를 확인해 주세요.');
+    if (!careLog) {
+      throw new Error('해당 돌봄 일지를 찾을 수 없거나 권한이 없습니다.');
     }
 
     const fb = await this.prisma.feedback.create({
       data: {
         careLogId,
-        authorId: author.id,
-        authorRole: '구청',
+        authorId,
+        authorRole: authorRole || '담당자',
         content,
       },
       include: {

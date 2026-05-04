@@ -27,36 +27,43 @@ model User {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  feedbacks Feedback[]
-  memos     Memo[]
+  feedbacks     Feedback[]
+  memos         Memo[]
+  managers      Manager[]
+  recipients    Recipient[]
+  careLogs      CareLog[]
+  visits        Visit[]
+  ownedMemos    Memo[]         @relation("MemoOwner")
+  dashboardKpis DashboardKPI[]
+  notifications Notification[]
 
   @@map("users")
 }
 
 // ============================================================
-// 돌봄 센터
+// 돌봄 센터  (전역 reference data — 모든 계정 공유)
 // ============================================================
 
 model Center {
   id   String @id @default(cuid())
   name String @unique
 
-  managers   Manager[]
-  careLogs   CareLog[]
+  managers Manager[]
+  careLogs CareLog[]
 
   @@map("centers")
 }
 
 // ============================================================
-// 동 (행정 구역)
+// 동 (행정 구역) (전역 reference data — 모든 계정 공유)
 // ============================================================
 
 model Dong {
   id   String @id @default(cuid())
   name String @unique
 
-  managerDongs  ManagerDong[]
-  recipients    Recipient[]
+  managerDongs ManagerDong[]
+  recipients   Recipient[]
 
   @@map("dongs")
 }
@@ -66,15 +73,18 @@ model Dong {
 // ============================================================
 
 model Manager {
-  id            String   @id @default(cuid())
-  name          String
-  gender        String   // male | female
-  phone         String?
-  email         String?
-  status        String   @default("active") // active | leave | retired
-  startDate     DateTime?
-  centerId      String
-  center        Center   @relation(fields: [centerId], references: [id], onDelete: Restrict)
+  id        String    @id @default(cuid())
+  name      String
+  gender    String // male | female
+  phone     String?
+  email     String?
+  status    String    @default("active") // active | leave | retired
+  startDate DateTime?
+  centerId  String
+  center    Center    @relation(fields: [centerId], references: [id], onDelete: Restrict)
+
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
   recipientCount Int @default(0)
   monthlyVisits  Int @default(0)
@@ -85,6 +95,7 @@ model Manager {
   visits        Visit[]
 
   @@index([centerId])
+  @@index([ownerId])
   @@map("managers")
 }
 
@@ -103,33 +114,37 @@ model ManagerDong {
 // ============================================================
 
 model Recipient {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   name          String
   age           Int
-  gender        String          // male | female
-  status        String   @default("normal") // normal | caution | urgent | unvisited
+  gender        String // male | female
+  status        String    @default("normal") // normal | caution | urgent | unvisited
   address       String?
   dongId        String?
-  dong          Dong?    @relation(fields: [dongId], references: [id], onDelete: SetNull)
+  dong          Dong?     @relation(fields: [dongId], references: [id], onDelete: SetNull)
   phone         String?
   careStartDate DateTime?
 
-  managerId     String?
-  manager       Manager? @relation(fields: [managerId], references: [id], onDelete: SetNull)
+  managerId String?
+  manager   Manager? @relation(fields: [managerId], references: [id], onDelete: SetNull)
+
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
   healthInfo       Json? // { diseases, medications, notes }
   emergencyContact Json? // { name, relationship, phone }
 
-  visitCount    Int      @default(0)
+  visitCount    Int       @default(0)
   lastVisitDate DateTime?
 
-  careLogs   CareLog[]
-  visits     Visit[]
-  memos      Memo[]
+  careLogs              CareLog[]
+  visits                Visit[]
+  memos                 Memo[]
   policyRecommendations RecipientPolicy[]
 
   @@index([managerId])
   @@index([dongId])
+  @@index([ownerId])
   @@map("recipients")
 }
 
@@ -138,43 +153,48 @@ model Recipient {
 // ============================================================
 
 model CareLog {
-  id            String   @id @default(cuid())
-  status        String   @default("pending") // pending | urgent | approved | rejected
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id        String   @id @default(cuid())
+  status    String   @default("pending") // pending | urgent | approved | rejected
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  recipientId   String
-  recipient     Recipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  recipientId String
+  recipient   Recipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
 
-  managerId     String
-  manager       Manager  @relation(fields: [managerId], references: [id], onDelete: Cascade)
+  managerId String
+  manager   Manager @relation(fields: [managerId], references: [id], onDelete: Cascade)
 
-  centerId      String?
-  center        Center?  @relation(fields: [centerId], references: [id], onDelete: SetNull)
+  centerId String?
+  center   Center? @relation(fields: [centerId], references: [id], onDelete: SetNull)
+
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
   visitDate     DateTime
   visitType     String?  @default("visit") // visit | call
   visitLocation String?
 
-  careContent       Json? // { healthStatus, mealStatus, emotionalStatus, livingEnvironment }
-  careContentBlocks Json? // [{ title, content }]
-  requiredActions   Json? // [{ id, priority, content }]
+  careContent         Json? // { healthStatus, mealStatus, emotionalStatus, livingEnvironment }
+  careContentBlocks   Json? // [{ title, content }]
+  requiredActions     Json? // [{ id, priority, content }]
   recommendedPolicies Json? // [{ id, name, organization, schedule }]
 
-  notes         String?
-  photos        Json?    // [url, ...]
+  notes           String?
+  photos          Json? // [url, ...]
   rejectionReason String?
 
-  feedbacks     Feedback[]
-  visit         Visit?
+  feedbacks Feedback[]
+  visit     Visit?
 
   @@index([recipientId])
   @@index([managerId])
+  @@index([ownerId])
   @@map("care_logs")
 }
 
 // ============================================================
 // 피드백 (돌봄 일지 코멘트)
+// careLog.ownerId 를 통해 격리됨 (별도 ownerId 불필요)
 // ============================================================
 
 model Feedback {
@@ -183,11 +203,11 @@ model Feedback {
   authorRole String?
   createdAt  DateTime @default(now())
 
-  careLogId  String
-  careLog    CareLog  @relation(fields: [careLogId], references: [id], onDelete: Cascade)
+  careLogId String
+  careLog   CareLog @relation(fields: [careLogId], references: [id], onDelete: Cascade)
 
-  authorId   String
-  author     User     @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Restrict)
 
   @@index([careLogId])
   @@map("feedbacks")
@@ -198,48 +218,58 @@ model Feedback {
 // ============================================================
 
 model Visit {
-  id          String   @id @default(cuid())
-  visitDate   DateTime
-  visitType   String   @default("visit") // visit | call
-  summary     String?
-  createdAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  visitDate DateTime
+  visitType String   @default("visit") // visit | call
+  summary   String?
+  createdAt DateTime @default(now())
 
   recipientId String
   recipient   Recipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
 
-  managerId   String
-  manager     Manager   @relation(fields: [managerId], references: [id], onDelete: Cascade)
+  managerId String
+  manager   Manager @relation(fields: [managerId], references: [id], onDelete: Cascade)
 
-  careLogId   String?   @unique
-  careLog     CareLog?  @relation(fields: [careLogId], references: [id], onDelete: SetNull)
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  careLogId String?  @unique
+  careLog   CareLog? @relation(fields: [careLogId], references: [id], onDelete: SetNull)
 
   @@index([recipientId])
   @@index([managerId])
+  @@index([ownerId])
   @@map("visits")
 }
 
 // ============================================================
 // 메모
+// ownerId = 메모를 보유한 워크스페이스 소유자 (대상자의 owner)
+// authorId = 실제 작성자 (User)
 // ============================================================
 
 model Memo {
-  id          String   @id @default(cuid())
-  content     String
-  type        String?  @default("normal") // normal | warning | important
-  createdAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  content   String
+  type      String?  @default("normal") // normal | warning | important
+  createdAt DateTime @default(now())
 
   recipientId String
   recipient   Recipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
 
-  authorId    String
-  author      User     @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Restrict)
+
+  ownerId String
+  owner   User   @relation("MemoOwner", fields: [ownerId], references: [id], onDelete: Cascade)
 
   @@index([recipientId])
+  @@index([ownerId])
   @@map("memos")
 }
 
 // ============================================================
-// 정책 (복지 정책)
+// 정책 (복지 정책) — 전역 reference data
 // ============================================================
 
 model Policy {
@@ -255,7 +285,7 @@ model Policy {
 }
 
 // ============================================================
-// 대상자-정책 연결
+// 대상자-정책 연결 (대상자 ownerId 통해 격리)
 // ============================================================
 
 model RecipientPolicy {
@@ -264,32 +294,36 @@ model RecipientPolicy {
   matchScore  Int      @default(0)
   createdAt   DateTime @default(now())
 
-  recipient   Recipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
-  policy      Policy    @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  recipient Recipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  policy    Policy    @relation(fields: [policyId], references: [id], onDelete: Cascade)
 
   @@id([recipientId, policyId])
   @@map("recipient_policies")
 }
 
 // ============================================================
-// 대시보드 KPI (집계 캐시)
+// 대시보드 KPI (집계 캐시) — 계정별
 // ============================================================
 
 model DashboardKPI {
-  id               String   @id @default(cuid())
-  date             DateTime @default(now()) @db.Date
-  todayVisits      Int      @default(0)
-  pendingReports   Int      @default(0)
-  approvedCount    Int      @default(0)
-  totalRecipients  Int      @default(0)
-  createdAt        DateTime @default(now())
+  id              String   @id @default(cuid())
+  date            DateTime @default(now()) @db.Date
+  todayVisits     Int      @default(0)
+  pendingReports  Int      @default(0)
+  approvedCount   Int      @default(0)
+  totalRecipients Int      @default(0)
+  createdAt       DateTime @default(now())
 
-  @@unique([date])
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@unique([date, ownerId])
+  @@index([ownerId])
   @@map("dashboard_kpi")
 }
 
 // ============================================================
-// 알림 (Notification)
+// 알림 (Notification) — 계정별
 // ============================================================
 
 model Notification {
@@ -301,5 +335,9 @@ model Notification {
   icon      String?  @default("info")
   createdAt DateTime @default(now())
 
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
   @@map("notifications")
 }

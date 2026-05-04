@@ -1,7 +1,5 @@
 /**
- * PostgreSQL Memo Repository (Prisma)
- *
- * 인메모리 InMemoryMemoRepo를 대체합니다.
+ * PostgreSQL Memo Repository (Prisma) — ownerId 격리
  */
 
 class PrismaMemoRepo {
@@ -9,15 +7,10 @@ class PrismaMemoRepo {
     this.prisma = prisma;
   }
 
-  /**
-   * 대상자별 메모 조회
-   */
-  async getMemosByRecipientId(recipientId) {
+  async getMemosByRecipientId(ownerId, recipientId) {
     const memos = await this.prisma.memo.findMany({
-      where: { recipientId },
-      include: {
-        author: { select: { id: true, name: true } },
-      },
+      where: { ownerId, recipientId },
+      include: { author: { select: { id: true, name: true } } },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -32,29 +25,23 @@ class PrismaMemoRepo {
     }));
   }
 
-  /**
-   * 메모 추가
-   */
-  async addMemo(recipientId, content, authorId) {
-    // authorId가 없으면 기본 admin 사용
-    let resolvedAuthorId = authorId;
-    if (!resolvedAuthorId) {
-      const admin = await this.prisma.user.findFirst({ where: { role: 'admin' } });
-      if (!admin) {
-        throw new Error('메모를 작성할 관리자 계정이 존재하지 않습니다. 시드 데이터를 확인해 주세요.');
-      }
-      resolvedAuthorId = admin.id;
+  async addMemo(ownerId, recipientId, content, authorId) {
+    // 본인 소유 대상자 검증
+    const recipient = await this.prisma.recipient.findFirst({
+      where: { id: recipientId, ownerId },
+    });
+    if (!recipient) {
+      throw new Error('해당 대상자를 찾을 수 없거나 권한이 없습니다.');
     }
 
     const memo = await this.prisma.memo.create({
       data: {
         recipientId,
-        authorId: resolvedAuthorId,
+        authorId: authorId || ownerId,
+        ownerId,
         content,
       },
-      include: {
-        author: { select: { id: true, name: true } },
-      },
+      include: { author: { select: { id: true, name: true } } },
     });
 
     return {

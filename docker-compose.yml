@@ -1,17 +1,19 @@
-version: '3.8'
 services:
   postgres:
     image: postgres:16-alpine
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: safehi
-      POSTGRES_PASSWORD: safehi_password
-      POSTGRES_DB: safehi_dashboard
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U safehi -d safehi_dashboard"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -21,8 +23,6 @@ services:
       context: ./core_backend_system/ai_dummy_server
     ports:
       - "5000:5000"
-    env_file:
-      - ./core_backend_system/.env
     environment:
       - AI_HOST=0.0.0.0
     restart: unless-stopped
@@ -34,18 +34,23 @@ services:
     ports:
       - "4100:4100"
     env_file:
-      - ./core_backend_system/.env
+      - .env
     environment:
-      - DATABASE_URL=postgresql://safehi:safehi_password@postgres:5432/safehi_dashboard?schema=public
-      - AI_HOST=ai_dummy
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      AI_HOST: ai_dummy
+      AI_PORT: "5000"
+      CORE_PORT: "4100"
+      USE_INMEMORY: "false"
     depends_on:
       postgres:
         condition: service_healthy
       ai_dummy:
         condition: service_started
+    restart: unless-stopped
     command: >
-      sh -c "npx prisma migrate deploy && 
-             node scripts/init-docker.js && 
+      sh -c "npx prisma migrate deploy &&
+             node scripts/init-docker.js &&
              node server.js"
 
 volumes:

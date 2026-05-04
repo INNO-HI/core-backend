@@ -87,9 +87,12 @@ function createContainer(options = {}) {
 
   function repos(req) {
     const tenant = resolveTenantFromReq(req, config.defaultTenant);
+    // 인증 미들웨어가 통과한 라우트에서는 req.user.id 가 ownerId 로 사용된다.
+    const ownerId = req.user?.id || null;
 
     return {
       tenant,
+      ownerId,
       sttRepo,
       visitCategoryRepo,
       welfarePolicyRepo,
