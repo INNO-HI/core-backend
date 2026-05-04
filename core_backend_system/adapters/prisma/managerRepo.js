@@ -94,11 +94,16 @@ class PrismaManagerRepo {
 
     if (!m) return null;
 
-    const [approvedReports, pendingReports, rejectedReports, totalVisits] = await Promise.all([
+    const monthStart = new Date();
+    monthStart.setDate(1);
+    monthStart.setHours(0, 0, 0, 0);
+
+    const [approvedReports, pendingReports, rejectedReports, totalVisits, monthlyReportsCount] = await Promise.all([
       this.prisma.careLog.count({ where: { ownerId, managerId: id, status: 'approved' } }),
       this.prisma.careLog.count({ where: { ownerId, managerId: id, status: 'pending' } }),
       this.prisma.careLog.count({ where: { ownerId, managerId: id, status: 'rejected' } }),
       this.prisma.visit.count({ where: { ownerId, managerId: id } }),
+      this.prisma.careLog.count({ where: { ownerId, managerId: id, createdAt: { gte: monthStart } } }),
     ]);
 
     const totalReports = approvedReports + pendingReports + rejectedReports;
@@ -118,7 +123,7 @@ class PrismaManagerRepo {
       startDate: m.startDate ? m.startDate.toISOString().split('T')[0] : null,
       stats: {
         monthlyVisits: m.monthlyVisits,
-        monthlyReports: Math.floor(m.monthlyVisits * 0.9),
+        monthlyReports: monthlyReportsCount,
         approvalRate,
         totalRecipients: m.recipientCount,
       },

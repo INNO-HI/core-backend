@@ -1,7 +1,8 @@
 /**
  * PostgreSQL Dashboard Repository (Prisma)
  *
- * 모든 메서드에 ownerId 가 필수. 호출자(router)가 req.user.id 를 넘긴다.
+ * 모든 계정별 메서드에 ownerId 가 필수. 호출자(router)가 req.user.id 를 넘긴다.
+ * WelfareNews/Notice 는 전역 reference data (ownerId 없음).
  */
 
 class PrismaDashboardRepo {
@@ -10,62 +11,85 @@ class PrismaDashboardRepo {
   }
 
   /**
-   * 대시보드 KPI 조회 (계정별)
+   * 대시보드 KPI 조회 (계정별, 실시간 계산)
    */
   async getKPI(ownerId) {
-    const today = new Date(new Date().toISOString().split('T')[0]);
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const tomorrowStart = new Date(todayStart);
+    tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+    const yesterdayStart = new Date(todayStart);
+    yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    let kpi = await this.prisma.dashboardKPI.findUnique({
-      where: { date_ownerId: { date: today, ownerId } },
-    });
+    const [
+      todayVisits,
+      yesterdayVisits,
+      pendingCount,
+      newPendingToday,
+      approvedTotal,
+      approvedThisMonth,
+      totalRecipients,
+      newRecipientsThisMonth,
+    ] = await Promise.all([
+      this.prisma.visit.count({
+        where: { ownerId, visitDate: { gte: todayStart, lt: tomorrowStart } },
+      }),
+      this.prisma.visit.count({
+        where: { ownerId, visitDate: { gte: yesterdayStart, lt: todayStart } },
+      }),
+      this.prisma.careLog.count({
+        where: { ownerId, status: { in: ['pending', 'urgent'] } },
+      }),
+      this.prisma.careLog.count({
+        where: { ownerId, status: { in: ['pending', 'urgent'] }, createdAt: { gte: todayStart } },
+      }),
+      this.prisma.careLog.count({ where: { ownerId, status: 'approved' } }),
+      this.prisma.careLog.count({
+        where: { ownerId, status: 'approved', updatedAt: { gte: monthStart } },
+      }),
+      this.prisma.recipient.count({ where: { ownerId } }),
+      this.prisma.recipient.count({ where: { ownerId, createdAt: { gte: monthStart } } }),
+    ]);
 
-    if (!kpi) {
-      const todayStart = new Date(today);
-      const todayEnd = new Date(today);
-      todayEnd.setDate(todayEnd.getDate() + 1);
-
-      const [todayVisits, pendingReports, approvedCount, totalRecipients] = await Promise.all([
-        this.prisma.visit.count({
-          where: { ownerId, visitDate: { gte: todayStart, lt: todayEnd } },
-        }),
-        this.prisma.careLog.count({ where: { ownerId, status: 'pending' } }),
-        this.prisma.careLog.count({ where: { ownerId, status: 'approved' } }),
-        this.prisma.recipient.count({ where: { ownerId } }),
-      ]);
-
-      kpi = { todayVisits, pendingReports, approvedCount, totalRecipients };
-    }
+    const visitDelta = todayVisits - yesterdayVisits;
+    const total = approvedTotal + pendingCount;
 
     return {
       todayVisits: {
         title: '오늘 방문',
-        value: kpi.todayVisits,
-        change: 3,
-        changeDirection: 'up',
+        value: todayVisits,
+        change: Math.abs(visitDelta),
+        changeDirection: visitDelta > 0 ? 'up' : visitDelta < 0 ? 'down' : 'none',
         progressColor: 'blue',
-        progressPercent: 75,
+        progressPercent:
+          yesterdayVisits > 0
+            ? Math.min(Math.round((todayVisits / yesterdayVisits) * 100), 100)
+            : todayVisits > 0
+            ? 100
+            : 0,
       },
       pendingReports: {
         title: '대기 중 보고서',
-        value: kpi.pendingReports,
-        change: -2,
-        changeDirection: 'down',
+        value: pendingCount,
+        change: newPendingToday,
+        changeDirection: newPendingToday > 0 ? 'up' : 'none',
         progressColor: 'yellow',
-        progressPercent: 30,
+        progressPercent: total > 0 ? Math.round((pendingCount / total) * 100) : 0,
       },
       approvedCount: {
         title: '승인 완료',
-        value: kpi.approvedCount,
-        change: 8,
-        changeDirection: 'up',
+        value: approvedTotal,
+        change: approvedThisMonth,
+        changeDirection: approvedThisMonth > 0 ? 'up' : 'none',
         progressColor: 'green',
-        progressPercent: 90,
+        progressPercent: total > 0 ? Math.round((approvedTotal / total) * 100) : 0,
       },
       totalRecipients: {
         title: '담당 대상자',
-        value: kpi.totalRecipients,
-        change: 0,
-        changeDirection: 'none',
+        value: totalRecipients,
+        change: newRecipientsThisMonth,
+        changeDirection: newRecipientsThisMonth > 0 ? 'up' : 'none',
         progressColor: 'purple',
         progressPercent: 100,
       },
@@ -118,39 +142,27 @@ class PrismaDashboardRepo {
   }
 
   /**
-   * 복지 뉴스 (정적 피드 — 전역 reference data)
+   * 복지 뉴스 (전역 reference data — DB에서 조회)
    */
   async getWelfareNews(_ownerId, limit = 10) {
-    const items = [
-      {
-        id: 'welfare-001',
-        title: '2026 상반기 복지 서비스 개편',
-        description: '독거노인 방문 횟수 월 8회로 확대',
-        tag: '신규',
-        date: '2026.03.15',
-      },
-      {
-        id: 'welfare-002',
-        title: '노인 맞춤 돌봄 교육 지원 확대',
-        description: '치매 예방 프로그램 비용 지원 강화',
-        tag: '업데이트',
-        date: '2026.03.12',
-      },
-      {
-        id: 'welfare-003',
-        title: '기초생활수급자 의료급여 변경',
-        description: '본인부담금 경감 적용 대상 확대',
-        tag: '정책',
-        date: '2026.03.08',
-      },
-    ];
-    return items.slice(0, limit);
+    const items = await this.prisma.welfareNews.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+
+    return items.map((item) => ({
+      id: item.id,
+      title: item.title,
+      description: item.description,
+      tag: item.tag || null,
+      date: item.date,
+    }));
   }
 
   async getTasks(ownerId, limit = 10) {
     const logs = await this.prisma.careLog.findMany({
       where: { ownerId, status: { in: ['urgent', 'pending'] } },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
       take: limit,
       include: {
         recipient: { select: { name: true } },
@@ -169,15 +181,20 @@ class PrismaDashboardRepo {
   }
 
   /**
-   * 공지사항 (정적 피드 — 전역)
+   * 공지사항 (전역 reference data — DB에서 조회)
    */
   async getNotices(_ownerId, limit = 10) {
-    const items = [
-      { id: 'notice-001', title: '4월 전체 매니저 회의 안내', date: '2026.03.15', isNew: true },
-      { id: 'notice-002', title: '돌봄 기록 시스템 업데이트 안내', date: '2026.03.12', isNew: false },
-      { id: 'notice-003', title: '2026 상반기 교육 일정 공지', date: '2026.03.08', isNew: false },
-    ];
-    return items.slice(0, limit);
+    const items = await this.prisma.notice.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+
+    return items.map((item) => ({
+      id: item.id,
+      title: item.title,
+      date: item.date,
+      isNew: item.isNew,
+    }));
   }
 }
 

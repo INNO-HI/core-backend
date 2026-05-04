@@ -29,18 +29,20 @@ async function main() {
 
   console.log(`ℹ️  Admin (${adminEmail}) already exists — checking reference data...`);
 
-  const [centerCount, dongCount, policyCount] = await Promise.all([
+  const [centerCount, dongCount, policyCount, welfareNewsCount, noticeCount] = await Promise.all([
     prisma.center.count(),
     prisma.dong.count(),
     prisma.policy.count(),
+    prisma.welfareNews.count(),
+    prisma.notice.count(),
   ]);
 
-  if (centerCount === 0 || dongCount === 0 || policyCount === 0) {
+  if (centerCount === 0 || dongCount === 0 || policyCount === 0 || welfareNewsCount === 0 || noticeCount === 0) {
     console.log('⚠️  Reference data missing — re-running seed to replenish...');
     execSync('node prisma/seed.js', { stdio: 'inherit' });
     console.log('✅ Reference data restored.');
   } else {
-    console.log(`✅ DB ready. Centers: ${centerCount}, Dongs: ${dongCount}, Policies: ${policyCount}`);
+    console.log(`✅ DB ready. Centers: ${centerCount}, Dongs: ${dongCount}, Policies: ${policyCount}, WelfareNews: ${welfareNewsCount}, Notices: ${noticeCount}`);
   }
 }
 

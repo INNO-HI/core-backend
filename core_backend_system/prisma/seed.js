@@ -169,6 +169,60 @@ async function main() {
   }
   console.log(`  ✅ Policies seeded (${policies.length})`);
 
+  // ============================================================
+  // 5. 복지 뉴스 — 전역 reference data
+  // ============================================================
+  const welfareNewsItems = [
+    {
+      id: 'welfare-001',
+      title: '2026 상반기 복지 서비스 개편',
+      description: '독거노인 방문 횟수 월 8회로 확대 적용',
+      tag: '신규',
+      date: '2026.03.15',
+    },
+    {
+      id: 'welfare-002',
+      title: '노인 맞춤 돌봄 교육 지원 확대',
+      description: '치매 예방 프로그램 비용 지원 강화',
+      tag: '업데이트',
+      date: '2026.03.12',
+    },
+    {
+      id: 'welfare-003',
+      title: '기초생활수급자 의료급여 변경',
+      description: '본인부담금 경감 적용 대상 확대',
+      tag: '정책',
+      date: '2026.03.08',
+    },
+  ];
+
+  for (const item of welfareNewsItems) {
+    await prisma.welfareNews.upsert({
+      where: { id: item.id },
+      update: { title: item.title, description: item.description, tag: item.tag, date: item.date },
+      create: item,
+    });
+  }
+  console.log(`  ✅ WelfareNews seeded (${welfareNewsItems.length})`);
+
+  // ============================================================
+  // 6. 공지사항 — 전역 reference data
+  // ============================================================
+  const noticeItems = [
+    { id: 'notice-001', title: '4월 전체 매니저 회의 안내', date: '2026.03.15', isNew: true },
+    { id: 'notice-002', title: '돌봄 기록 시스템 업데이트 안내', date: '2026.03.12', isNew: false },
+    { id: 'notice-003', title: '2026 상반기 교육 일정 공지', date: '2026.03.08', isNew: false },
+  ];
+
+  for (const item of noticeItems) {
+    await prisma.notice.upsert({
+      where: { id: item.id },
+      update: { title: item.title, date: item.date, isNew: item.isNew },
+      create: item,
+    });
+  }
+  console.log(`  ✅ Notices seeded (${noticeItems.length})`);
+
   console.log('\n🎉 Production seeding complete.');
   console.log('   • Center, Dong, Policy → 전역 reference data (모든 계정 공유)');
   console.log('   • 신규 가입 계정 → 빈 대시보드로 시작');

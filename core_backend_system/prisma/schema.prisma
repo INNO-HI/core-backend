@@ -136,6 +136,7 @@ model Recipient {
 
   visitCount    Int       @default(0)
   lastVisitDate DateTime?
+  createdAt     DateTime  @default(now())
 
   careLogs              CareLog[]
   visits                Visit[]
@@ -320,6 +321,35 @@ model DashboardKPI {
   @@unique([date, ownerId])
   @@index([ownerId])
   @@map("dashboard_kpi")
+}
+
+// ============================================================
+// 복지 뉴스 (전역 reference data — 모든 계정 공유)
+// ============================================================
+
+model WelfareNews {
+  id          String   @id @default(cuid())
+  title       String
+  description String
+  tag         String?
+  date        String
+  createdAt   DateTime @default(now())
+
+  @@map("welfare_news")
+}
+
+// ============================================================
+// 공지사항 (전역 reference data — 모든 계정 공유)
+// ============================================================
+
+model Notice {
+  id        String   @id @default(cuid())
+  title     String
+  date      String
+  isNew     Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@map("notices")
 }
 
 // ============================================================
