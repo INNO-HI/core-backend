@@ -6,6 +6,7 @@ const rateLimit = require('express-rate-limit');
 const { createContainer } = require('./container');
 const { createApiRouter } = require('./presentation/apiRouter');
 const { createDashboardRouter } = require('./presentation/dashboardRouter');
+const { createAiPipelineRouter } = require('./presentation/aiPipelineRouter');
 const { renderDemoPage } = require('./presentation/demoPage');
 
 function createCoreApp(options = {}) {
@@ -65,6 +66,10 @@ function createCoreApp(options = {}) {
 
   app.use('/core/api', createApiRouter(container));
   app.use('/core/dashboard', createDashboardRouter(container));
+  app.use('/core/pipeline', createAiPipelineRouter({
+    aiHost: process.env.AI_HOST,
+    aiPort: process.env.AI_PORT,
+  }));
 
   app.get('/core/health', (req, res) => {
     res.json({ ok: true, service: 'core_backend_system' });
