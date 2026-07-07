@@ -547,6 +547,90 @@ function createDashboardRouter(container) {
     }
   });
 
+  // ============================================================
+  // 통계/리포트 (Statistics)
+  // ============================================================
+
+  router.get('/statistics/overview', async (req, res, next) => {
+    try {
+      const { statisticsRepo, ownerId } = container.repos(req);
+      const data = await statisticsRepo.getOverview(ownerId, req.query.month);
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.get('/statistics/visit-trend', async (req, res, next) => {
+    try {
+      const period = Number(req.query.period) === 12 ? 12 : 6;
+      const { statisticsRepo, ownerId } = container.repos(req);
+      const data = await statisticsRepo.getVisitTrend(ownerId, period);
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ============================================================
+  // 설정 (Settings)
+  // ============================================================
+
+  router.get('/settings', async (req, res, next) => {
+    try {
+      const { settingsRepo, ownerId } = container.repos(req);
+      const data = await settingsRepo.getSettings(ownerId);
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.patch('/settings/profile', async (req, res, next) => {
+    try {
+      const { settingsRepo, ownerId } = container.repos(req);
+      const data = await settingsRepo.updateProfile(ownerId, req.body || {});
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post('/settings/password', async (req, res, next) => {
+    try {
+      const { currentPassword, newPassword } = req.body || {};
+      if (!currentPassword || !newPassword) {
+        return res.status(400).json({
+          ok: false,
+          error: { code: 'BAD_REQUEST', message: 'currentPassword and newPassword are required' },
+        });
+      }
+
+      const { settingsRepo, ownerId } = container.repos(req);
+      const result = await settingsRepo.changePassword(ownerId, { currentPassword, newPassword });
+      if (!result.success) {
+        return res.status(400).json({ ok: false, error: { code: 'PASSWORD_CHANGE_FAILED', message: result.error } });
+      }
+      return res.json({ ok: true, data: { success: true } });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ============================================================
+  // 필터 옵션 (동/센터/매니저 — 실 데이터)
+  // ============================================================
+
+  router.get('/filter-options', async (req, res, next) => {
+    try {
+      const { dashboardRepo, ownerId } = container.repos(req);
+      const data = await dashboardRepo.getFilterOptions(ownerId);
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   return router;
 }
 

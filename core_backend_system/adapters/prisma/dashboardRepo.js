@@ -196,6 +196,24 @@ class PrismaDashboardRepo {
       isNew: item.isNew,
     }));
   }
+
+  /**
+   * 필터 드롭다운 옵션 (실 데이터 기준)
+   * 동/센터는 전역 reference, 매니저는 계정별.
+   */
+  async getFilterOptions(ownerId) {
+    const [dongs, centers, managers] = await Promise.all([
+      this.prisma.dong.findMany({ orderBy: { name: 'asc' }, select: { name: true } }),
+      this.prisma.center.findMany({ orderBy: { name: 'asc' }, select: { name: true } }),
+      this.prisma.manager.findMany({ where: { ownerId }, orderBy: { name: 'asc' }, select: { name: true } }),
+    ]);
+
+    return {
+      dongs: dongs.map((d) => d.name),
+      centers: centers.map((c) => c.name),
+      managers: [...new Set(managers.map((m) => m.name))],
+    };
+  }
 }
 
 module.exports = { PrismaDashboardRepo };

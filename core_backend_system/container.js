@@ -27,6 +27,8 @@ const {
   PrismaVisitRepo,
   PrismaMemoRepo,
   PrismaPolicyRepo,
+  PrismaStatisticsRepo,
+  PrismaSettingsRepo,
 } = require('./adapters/prisma');
 
 // InMemory 리포지토리 (DB 없이 로컬 테스트용)
@@ -74,6 +76,10 @@ function createContainer(options = {}) {
   const memoRepo = useInMemory ? new InMemoryMemoRepo() : new PrismaMemoRepo({ prisma });
   const policyRepo = useInMemory ? new InMemoryPolicyRepo() : new PrismaPolicyRepo({ prisma });
 
+  // 통계/설정은 Prisma 집계 전용 (InMemory 미지원 — 프로덕션은 Prisma)
+  const statisticsRepo = new PrismaStatisticsRepo({ prisma });
+  const settingsRepo = new PrismaSettingsRepo({ prisma });
+
   const dashboardService = new DashboardService();
 
   // MySQL repos — singleton (같은 pool 공유)
@@ -104,6 +110,8 @@ function createContainer(options = {}) {
       visitRepo,
       memoRepo,
       policyRepo,
+      statisticsRepo,
+      settingsRepo,
     };
   }
 
