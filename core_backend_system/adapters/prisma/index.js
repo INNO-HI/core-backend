@@ -13,6 +13,7 @@ const { PrismaMemoRepo } = require('./memoRepo');
 const { PrismaPolicyRepo } = require('./policyRepo');
 const { PrismaStatisticsRepo } = require('./statisticsRepo');
 const { PrismaSettingsRepo } = require('./settingsRepo');
+const { PrismaUserRepo } = require('./userRepo');
 
 module.exports = {
   PrismaDashboardRepo,
@@ -24,4 +25,5 @@ module.exports = {
   PrismaPolicyRepo,
   PrismaStatisticsRepo,
   PrismaSettingsRepo,
+  PrismaUserRepo,
 };

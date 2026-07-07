@@ -7,7 +7,7 @@
  */
 
 const express = require('express');
-const { requireAuth } = require('./authMiddleware');
+const { requireAuth, requireAdmin } = require('./authMiddleware');
 
 function createDashboardRouter(container) {
   const router = express.Router();
@@ -733,6 +733,89 @@ function createDashboardRouter(container) {
       const { dashboardRepo, ownerId } = container.repos(req);
       const data = await dashboardRepo.getFilterOptions(ownerId);
       return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ============================================================
+  // 계정 관리 (Accounts) — 관리자(admin) 전용
+  // ============================================================
+
+  router.get('/accounts', requireAdmin, async (req, res, next) => {
+    try {
+      const { userRepo } = container.repos(req);
+      const data = await userRepo.listUsers();
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post('/accounts', requireAdmin, async (req, res, next) => {
+    try {
+      const { email, password } = req.body || {};
+      if (!email || !password) {
+        return res.status(400).json({
+          ok: false,
+          error: { code: 'BAD_REQUEST', message: '이메일과 비밀번호는 필수입니다.' },
+        });
+      }
+      const { userRepo } = container.repos(req);
+      const data = await userRepo.createUser(req.body || {});
+      return res.status(201).json({ ok: true, data });
+    } catch (err) {
+      if (err && /이미 사용|필수|8자/.test(err.message || '')) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: err.message } });
+      }
+      next(err);
+    }
+  });
+
+  router.patch('/accounts/:id', requireAdmin, async (req, res, next) => {
+    try {
+      const { userRepo } = container.repos(req);
+      const data = await userRepo.updateUser(req.params.id, req.body || {});
+      if (!data) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '계정을 찾을 수 없습니다' } });
+      }
+      return res.json({ ok: true, data });
+    } catch (err) {
+      if (err && /마지막 관리자/.test(err.message || '')) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: err.message } });
+      }
+      next(err);
+    }
+  });
+
+  router.post('/accounts/:id/reset-password', requireAdmin, async (req, res, next) => {
+    try {
+      const { newPassword } = req.body || {};
+      const { userRepo } = container.repos(req);
+      const result = await userRepo.resetPassword(req.params.id, newPassword);
+      if (result.notFound) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '계정을 찾을 수 없습니다' } });
+      }
+      if (!result.success) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: result.error } });
+      }
+      return res.json({ ok: true, data: { success: true } });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.delete('/accounts/:id', requireAdmin, async (req, res, next) => {
+    try {
+      const { userRepo } = container.repos(req);
+      const result = await userRepo.deleteUser(req.user.id, req.params.id);
+      if (result.notFound) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '계정을 찾을 수 없습니다' } });
+      }
+      if (!result.success) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: result.error } });
+      }
+      return res.json({ ok: true, data: { success: true } });
     } catch (err) {
       next(err);
     }

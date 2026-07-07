@@ -8,28 +8,9 @@
  * 토큰 만료(TOKEN_EXPIRED) 와 서명 불일치(INVALID_TOKEN) 를 구분해 반환한다.
  */
 
-// const { verifyToken } = require('../lib/auth'); // 토큰 인증 임시 비활성화
+const { verifyToken } = require('../lib/auth');
 
-// TODO: 토큰 인증 임시 비활성화 — 정상화 시 아래 주석 해제하고 이 함수/캐시 제거할 것
-const { prisma } = require('../lib/prisma');
-let _cachedAdminId = null;
-async function _getAdminFallbackId() {
-  if (_cachedAdminId) return _cachedAdminId;
-  try {
-    const admin = await prisma.user.findFirst({ where: { role: 'admin' }, select: { id: true } });
-    if (admin) _cachedAdminId = admin.id;
-  } catch (_) {}
-  return _cachedAdminId;
-}
-
-async function requireAuth(req, res, next) {
-  // TODO: 토큰 인증 임시 비활성화 — 정상화 시 아래 주석 해제하고 이 블록 제거할 것
-  const fallbackId = await _getAdminFallbackId();
-  req.user = { id: fallbackId, email: 'admin@safehi.kr', role: 'admin' };
-  return next();
-
-  /* ── 원본 인증 로직 (비활성화) ───────────────────────────────────────
-  const { verifyToken } = require('../lib/auth');
+function requireAuth(req, res, next) {
   const header = req.headers['authorization'] || '';
   if (!header.startsWith('Bearer ')) {
     return res.status(401).json({
@@ -37,6 +18,7 @@ async function requireAuth(req, res, next) {
       error: { code: 'UNAUTHORIZED', message: '인증이 필요합니다. 다시 로그인해 주세요.' },
     });
   }
+
   const token = header.slice('Bearer '.length).trim();
   try {
     const payload = verifyToken(token);
@@ -55,7 +37,20 @@ async function requireAuth(req, res, next) {
       },
     });
   }
-  ─────────────────────────────────────────────────────────────────── */
 }
 
-module.exports = { requireAuth };
+/**
+ * 관리자 전용 미들웨어 — requireAuth 이후에 사용.
+ * req.user.role 이 'admin' 이 아니면 403.
+ */
+function requireAdmin(req, res, next) {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({
+      ok: false,
+      error: { code: 'FORBIDDEN', message: '관리자 권한이 필요합니다.' },
+    });
+  }
+  return next();
+}
+
+module.exports = { requireAuth, requireAdmin };
