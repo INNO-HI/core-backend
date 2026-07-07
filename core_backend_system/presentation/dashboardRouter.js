@@ -343,6 +343,20 @@ function createDashboardRouter(container) {
     }
   });
 
+  router.post('/managers', async (req, res, next) => {
+    try {
+      const { name } = req.body || {};
+      if (!name || !String(name).trim()) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: '이름은 필수입니다.' } });
+      }
+      const { managerRepo, ownerId } = container.repos(req);
+      const data = await managerRepo.createManager(ownerId, req.body || {});
+      return res.status(201).json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   router.get('/managers/:id', async (req, res, next) => {
     try {
       const { managerRepo, ownerId } = container.repos(req);
@@ -351,6 +365,32 @@ function createDashboardRouter(container) {
         return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '매니저를 찾을 수 없습니다' } });
       }
       return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.patch('/managers/:id', async (req, res, next) => {
+    try {
+      const { managerRepo, ownerId } = container.repos(req);
+      const data = await managerRepo.updateManager(ownerId, req.params.id, req.body || {});
+      if (!data) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '매니저를 찾을 수 없습니다' } });
+      }
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.delete('/managers/:id', async (req, res, next) => {
+    try {
+      const { managerRepo, ownerId } = container.repos(req);
+      const result = await managerRepo.deleteManager(ownerId, req.params.id);
+      if (result.notFound) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '매니저를 찾을 수 없습니다' } });
+      }
+      return res.json({ ok: true, data: { success: true } });
     } catch (err) {
       next(err);
     }
@@ -441,6 +481,20 @@ function createDashboardRouter(container) {
     }
   });
 
+  router.post('/recipients', async (req, res, next) => {
+    try {
+      const { name } = req.body || {};
+      if (!name || !String(name).trim()) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: '이름은 필수입니다.' } });
+      }
+      const { recipientRepo, ownerId } = container.repos(req);
+      const data = await recipientRepo.createRecipient(ownerId, req.body || {});
+      return res.status(201).json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   router.get('/recipients/:id', async (req, res, next) => {
     try {
       const { recipientRepo, ownerId } = container.repos(req);
@@ -449,6 +503,32 @@ function createDashboardRouter(container) {
         return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '대상자를 찾을 수 없습니다' } });
       }
       return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.patch('/recipients/:id', async (req, res, next) => {
+    try {
+      const { recipientRepo, ownerId } = container.repos(req);
+      const data = await recipientRepo.updateRecipient(ownerId, req.params.id, req.body || {});
+      if (!data) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '대상자를 찾을 수 없습니다' } });
+      }
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.delete('/recipients/:id', async (req, res, next) => {
+    try {
+      const { recipientRepo, ownerId } = container.repos(req);
+      const result = await recipientRepo.deleteRecipient(ownerId, req.params.id);
+      if (result.notFound) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '대상자를 찾을 수 없습니다' } });
+      }
+      return res.json({ ok: true, data: { success: true } });
     } catch (err) {
       next(err);
     }
@@ -516,8 +596,35 @@ function createDashboardRouter(container) {
       }
 
       const { memoRepo, ownerId } = container.repos(req);
-      const data = await memoRepo.addMemo(ownerId, req.params.id, content, req.user.id);
+      const data = await memoRepo.addMemo(ownerId, req.params.id, content, req.user.id, req.body.type);
       return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.patch('/recipients/:id/memos/:memoId', async (req, res, next) => {
+    try {
+      const { content, type } = req.body || {};
+      const { memoRepo, ownerId } = container.repos(req);
+      const data = await memoRepo.updateMemo(ownerId, req.params.memoId, { content, type });
+      if (!data) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '메모를 찾을 수 없습니다' } });
+      }
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.delete('/recipients/:id/memos/:memoId', async (req, res, next) => {
+    try {
+      const { memoRepo, ownerId } = container.repos(req);
+      const result = await memoRepo.deleteMemo(ownerId, req.params.memoId);
+      if (result.notFound) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '메모를 찾을 수 없습니다' } });
+      }
+      return res.json({ ok: true, data: { success: true } });
     } catch (err) {
       next(err);
     }

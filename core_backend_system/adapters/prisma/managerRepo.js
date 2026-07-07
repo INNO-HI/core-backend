@@ -238,6 +238,88 @@ class PrismaManagerRepo {
       typeCounts: { all: allVisits.length, regular: regularCount, emergency: emergencyCount, call: callCount },
     };
   }
+
+  /** 센터 이름 → id. 못 찾으면 첫 센터로 fallback (centerId 는 필수) */
+  async _resolveCenterId(name) {
+    if (name) {
+      const c = await this.prisma.center.findFirst({ where: { name } });
+      if (c) return c.id;
+    }
+    const first = await this.prisma.center.findFirst();
+    return first?.id || null;
+  }
+
+  /** 매니저 담당 동 연결 재설정 (동 이름 배열) */
+  async _setAssignedDongs(managerId, dongNames = []) {
+    await this.prisma.managerDong.deleteMany({ where: { managerId } });
+    if (!Array.isArray(dongNames) || dongNames.length === 0) return;
+    const dongs = await this.prisma.dong.findMany({ where: { name: { in: dongNames } }, select: { id: true } });
+    for (const d of dongs) {
+      await this.prisma.managerDong.create({ data: { managerId, dongId: d.id } });
+    }
+  }
+
+  /** 매니저 생성 */
+  async createManager(ownerId, data = {}) {
+    if (!data.name || !String(data.name).trim()) {
+      throw new Error('이름은 필수입니다.');
+    }
+
+    const centerId = await this._resolveCenterId(data.center || data.centerName);
+    if (!centerId) {
+      throw new Error('등록된 센터가 없어 매니저를 생성할 수 없습니다.');
+    }
+
+    const created = await this.prisma.manager.create({
+      data: {
+        ownerId,
+        name: String(data.name).trim(),
+        gender: data.gender === 'male' ? 'male' : 'female',
+        phone: data.phone || null,
+        email: data.email || null,
+        status: data.status || 'active',
+        centerId,
+        startDate: data.startDate ? new Date(data.startDate) : null,
+        recipientCount: 0,
+        monthlyVisits: 0,
+      },
+    });
+
+    await this._setAssignedDongs(created.id, data.assignedDongs);
+    return this.getManagerById(ownerId, created.id);
+  }
+
+  /** 매니저 수정 */
+  async updateManager(ownerId, id, data = {}) {
+    const existing = await this.prisma.manager.findFirst({ where: { id, ownerId } });
+    if (!existing) return null;
+
+    const patch = {};
+    if (data.name !== undefined) patch.name = String(data.name).trim();
+    if (data.gender !== undefined) patch.gender = data.gender === 'male' ? 'male' : 'female';
+    if (data.phone !== undefined) patch.phone = data.phone || null;
+    if (data.email !== undefined) patch.email = data.email || null;
+    if (data.status !== undefined) patch.status = data.status;
+    if (data.startDate !== undefined) patch.startDate = data.startDate ? new Date(data.startDate) : null;
+    if (data.center !== undefined || data.centerName !== undefined) {
+      patch.centerId = await this._resolveCenterId(data.center || data.centerName);
+    }
+
+    await this.prisma.manager.update({ where: { id }, data: patch });
+    if (data.assignedDongs !== undefined) {
+      await this._setAssignedDongs(id, data.assignedDongs);
+    }
+
+    return this.getManagerById(ownerId, id);
+  }
+
+  /** 매니저 삭제 (담당 대상자는 담당자 해제, 일지/방문 cascade) */
+  async deleteManager(ownerId, id) {
+    const existing = await this.prisma.manager.findFirst({ where: { id, ownerId } });
+    if (!existing) return { success: false, notFound: true };
+    await this.prisma.manager.delete({ where: { id } });
+    return { success: true };
+  }
 }
 
 module.exports = { PrismaManagerRepo };

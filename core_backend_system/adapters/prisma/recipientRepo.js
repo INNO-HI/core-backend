@@ -186,6 +186,85 @@ class PrismaRecipientRepo {
       })),
     };
   }
+
+  /** 동 이름 → id (전역 reference) */
+  async _resolveDongId(name) {
+    if (!name || name === 'all') return null;
+    const d = await this.prisma.dong.findFirst({ where: { name } });
+    return d?.id || null;
+  }
+
+  /** 매니저 이름 → id (계정별) */
+  async _resolveManagerId(ownerId, name) {
+    if (!name || name === 'all') return null;
+    const m = await this.prisma.manager.findFirst({ where: { ownerId, name } });
+    return m?.id || null;
+  }
+
+  /** 대상자 생성 */
+  async createRecipient(ownerId, data = {}) {
+    if (!data.name || !String(data.name).trim()) {
+      throw new Error('이름은 필수입니다.');
+    }
+
+    const [dongId, managerId] = await Promise.all([
+      this._resolveDongId(data.dong),
+      this._resolveManagerId(ownerId, data.managerName || data.manager),
+    ]);
+
+    const created = await this.prisma.recipient.create({
+      data: {
+        ownerId,
+        name: String(data.name).trim(),
+        age: Number(data.age) || 0,
+        gender: data.gender === 'male' ? 'male' : 'female',
+        status: data.status || 'normal',
+        address: data.address || null,
+        phone: data.phone || null,
+        dongId,
+        managerId,
+        careStartDate: data.careStartDate ? new Date(data.careStartDate) : null,
+        healthInfo: data.healthInfo ?? null,
+        emergencyContact: data.emergencyContact ?? null,
+      },
+    });
+
+    return this.getRecipientById(ownerId, created.id);
+  }
+
+  /** 대상자 수정 */
+  async updateRecipient(ownerId, id, data = {}) {
+    const existing = await this.prisma.recipient.findFirst({ where: { id, ownerId } });
+    if (!existing) return null;
+
+    const patch = {};
+    if (data.name !== undefined) patch.name = String(data.name).trim();
+    if (data.age !== undefined) patch.age = Number(data.age) || 0;
+    if (data.gender !== undefined) patch.gender = data.gender === 'male' ? 'male' : 'female';
+    if (data.status !== undefined) patch.status = data.status;
+    if (data.address !== undefined) patch.address = data.address || null;
+    if (data.phone !== undefined) patch.phone = data.phone || null;
+    if (data.careStartDate !== undefined) {
+      patch.careStartDate = data.careStartDate ? new Date(data.careStartDate) : null;
+    }
+    if (data.healthInfo !== undefined) patch.healthInfo = data.healthInfo;
+    if (data.emergencyContact !== undefined) patch.emergencyContact = data.emergencyContact;
+    if (data.dong !== undefined) patch.dongId = await this._resolveDongId(data.dong);
+    if (data.managerName !== undefined || data.manager !== undefined) {
+      patch.managerId = await this._resolveManagerId(ownerId, data.managerName || data.manager);
+    }
+
+    await this.prisma.recipient.update({ where: { id }, data: patch });
+    return this.getRecipientById(ownerId, id);
+  }
+
+  /** 대상자 삭제 (연결된 일지/방문/메모/정책추천 cascade) */
+  async deleteRecipient(ownerId, id) {
+    const existing = await this.prisma.recipient.findFirst({ where: { id, ownerId } });
+    if (!existing) return { success: false, notFound: true };
+    await this.prisma.recipient.delete({ where: { id } });
+    return { success: true };
+  }
 }
 
 module.exports = { PrismaRecipientRepo };
