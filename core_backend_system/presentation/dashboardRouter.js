@@ -168,6 +168,32 @@ function createDashboardRouter(container) {
     }
   });
 
+  // 소식함 발송 (BACKEND_DB_SPEC.md §4.4) — 상태 변화 / 복지 소식 / 공지사항
+  router.post('/notifications', async (req, res, next) => {
+    try {
+      const { title, content, kind, isUrgent, link, icon } = req.body || {};
+      if (!title || !content) {
+        return res.status(400).json({
+          ok: false,
+          error: { code: 'BAD_REQUEST', message: '제목과 내용은 필수입니다.' },
+        });
+      }
+
+      const { dashboardRepo, ownerId } = container.repos(req);
+      const data = await dashboardRepo.createNotification(ownerId, {
+        kind,
+        title: String(title).trim(),
+        content: String(content).trim(),
+        isUrgent,
+        link,
+        icon,
+      });
+      return res.status(201).json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   router.get('/welfare-news', async (req, res, next) => {
     try {
       const limit = Number(req.query.limit) || 10;
@@ -179,13 +205,65 @@ function createDashboardRouter(container) {
     }
   });
 
+  // 일정 (BACKEND_DB_SPEC.md §3.3, §7 1단계)
+  // ?date=YYYY-MM-DD 또는 ?assigneeId= 가 오면 실제 tasks 테이블에서
+  // type·startAt·durationMin·status 를 내려준다 (앱의 홀짝 추측 제거).
+  // 파라미터 없이 부르면 기존 대시보드 홈 위젯용 응답을 유지한다.
   router.get('/tasks', async (req, res, next) => {
     try {
+      const { date, assigneeId, recipientId, status } = req.query;
+      const { dashboardRepo, taskRepo, ownerId } = container.repos(req);
+
+      if (date || assigneeId || recipientId) {
+        const data = await taskRepo.listTasks(ownerId, { date, assigneeId, recipientId, status });
+        return res.json({ ok: true, data });
+      }
+
       const limit = Number(req.query.limit) || 10;
-      const { dashboardRepo, ownerId } = container.repos(req);
       const data = await dashboardRepo.getTasks(ownerId, limit);
       return res.json({ ok: true, data });
     } catch (err) {
+      next(err);
+    }
+  });
+
+  // 일정 배포 (대시보드) — tasks 는 대시보드가 만들고 앱은 읽는다
+  router.post('/tasks', async (req, res, next) => {
+    try {
+      const { recipientId, startAt } = req.body || {};
+      if (!recipientId || !startAt) {
+        return res.status(400).json({
+          ok: false,
+          error: { code: 'BAD_REQUEST', message: 'recipientId와 startAt은 필수입니다.' },
+        });
+      }
+      const { taskRepo, ownerId } = container.repos(req);
+      const data = await taskRepo.createTask(ownerId, req.body);
+      return res.status(201).json({ ok: true, data });
+    } catch (err) {
+      if (err && /찾을 수 없|배정|지정되지/.test(err.message || '')) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: err.message } });
+      }
+      next(err);
+    }
+  });
+
+  router.patch('/tasks/:id', async (req, res, next) => {
+    try {
+      const { status } = req.body || {};
+      if (status && !['scheduled', 'done', 'canceled'].includes(status)) {
+        return res.status(400).json({
+          ok: false,
+          error: { code: 'BAD_REQUEST', message: 'status는 scheduled, done, canceled 중 하나여야 합니다.' },
+        });
+      }
+      const { taskRepo, ownerId } = container.repos(req);
+      const data = await taskRepo.updateTask(ownerId, req.params.id, req.body || {});
+      return res.json({ ok: true, data });
+    } catch (err) {
+      if (err && /찾을 수 없/.test(err.message || '')) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: err.message } });
+      }
       next(err);
     }
   });
@@ -225,6 +303,43 @@ function createDashboardRouter(container) {
     }
   });
 
+  /**
+   * 앱 기록 적재 (BACKEND_DB_SPEC.md §7 2단계)
+   * care_log + sections + risk_assessment + evidence 를 한 트랜잭션으로 넣고,
+   * 경보 이상이면 risk_queue 에 올린다. confirmedBy = 토큰 사용자.
+   */
+  router.post('/care-logs', async (req, res, next) => {
+    try {
+      const { recipientId, visitedAt } = req.body || {};
+      if (!recipientId || !visitedAt) {
+        return res.status(400).json({
+          ok: false,
+          error: { code: 'BAD_REQUEST', message: 'recipientId와 visitedAt은 필수입니다.' },
+        });
+      }
+
+      const { careLogRepo, auditRepo, ownerId } = container.repos(req);
+      const data = await careLogRepo.createFromApp(ownerId, req.body, req.user.id);
+
+      await auditRepo.log({
+        ownerId,
+        actorId: req.user.id,
+        action: 'care_log.create',
+        targetType: 'care_log',
+        targetId: data.id,
+        payload: { grade: data.riskAssessment?.grade || null },
+        ip: req.ip,
+      });
+
+      return res.status(201).json({ ok: true, data });
+    } catch (err) {
+      if (err && /찾을 수 없|배정|형식/.test(err.message || '')) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: err.message } });
+      }
+      next(err);
+    }
+  });
+
   router.get('/care-logs/:id', async (req, res, next) => {
     try {
       const { careLogRepo, ownerId } = container.repos(req);
@@ -241,7 +356,8 @@ function createDashboardRouter(container) {
   router.patch('/care-logs/bulk-status', async (req, res, next) => {
     try {
       const { ids, status } = req.body;
-      const validStatuses = ['pending', 'urgent', 'approved', 'rejected'];
+      // 스펙 검토 흐름: submitted → in_review → approved | rejected (§4.2)
+      const validStatuses = ['draft', 'submitted', 'in_review', 'pending', 'urgent', 'approved', 'rejected'];
       if (!Array.isArray(ids) || !status) {
         return res.status(400).json({
           ok: false,
@@ -266,7 +382,7 @@ function createDashboardRouter(container) {
   router.patch('/care-logs/:id/status', async (req, res, next) => {
     try {
       const { status, reason } = req.body;
-      const validStatuses = ['pending', 'urgent', 'approved', 'rejected'];
+      const validStatuses = ['draft', 'submitted', 'in_review', 'pending', 'urgent', 'approved', 'rejected'];
       if (!status) {
         return res.status(400).json({
           ok: false,
@@ -280,8 +396,21 @@ function createDashboardRouter(container) {
         });
       }
 
-      const { careLogRepo, ownerId } = container.repos(req);
-      const result = await careLogRepo.updateStatus(ownerId, req.params.id, status, reason);
+      const { careLogRepo, auditRepo, ownerId } = container.repos(req);
+      const result = await careLogRepo.updateStatus(ownerId, req.params.id, status, reason, req.user.id);
+
+      if (status === 'approved' || status === 'rejected') {
+        await auditRepo.log({
+          ownerId,
+          actorId: req.user.id,
+          action: status === 'approved' ? 'care_log.approve' : 'care_log.reject',
+          targetType: 'care_log',
+          targetId: req.params.id,
+          payload: reason ? { reason } : undefined,
+          ip: req.ip,
+        });
+      }
+
       return res.json({ ok: true, data: result });
     } catch (err) {
       next(err);
@@ -308,6 +437,57 @@ function createDashboardRouter(container) {
       );
       return res.json({ ok: true, data: result });
     } catch (err) {
+      next(err);
+    }
+  });
+
+  // ============================================================
+  // 위기 큐 (Risk Queue) — BACKEND_DB_SPEC.md §3.8, §7 3단계
+  // 경보(24h)·긴급(4h)만 들어오며, 사람이 확인 처리를 해야 내려간다.
+  // ============================================================
+
+  router.get('/risk-queue', async (req, res, next) => {
+    try {
+      const { riskRepo, ownerId } = container.repos(req);
+      const data = await riskRepo.getQueue(ownerId);
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post('/risk-queue/:id/ack', async (req, res, next) => {
+    try {
+      const { note } = req.body || {};
+      if (!note || String(note).trim().length < 5) {
+        return res.status(400).json({
+          ok: false,
+          error: { code: 'BAD_REQUEST', message: '처리 사유는 5자 이상 입력해야 합니다.' },
+        });
+      }
+
+      const { riskRepo, auditRepo, ownerId } = container.repos(req);
+      const data = await riskRepo.acknowledge(ownerId, req.params.id, String(note).trim(), req.user.id);
+
+      // 누가, 언제 확인했는지가 감사의 대상이다 (스펙 §1)
+      await auditRepo.log({
+        ownerId,
+        actorId: req.user.id,
+        action: 'risk.ack',
+        targetType: 'risk_queue',
+        targetId: req.params.id,
+        payload: { note: String(note).trim() },
+        ip: req.ip,
+      });
+
+      return res.json({ ok: true, data });
+    } catch (err) {
+      if (err && /찾을 수 없/.test(err.message || '')) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: err.message } });
+      }
+      if (err && /이미 확인/.test(err.message || '')) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: err.message } });
+      }
       next(err);
     }
   });
@@ -626,6 +806,81 @@ function createDashboardRouter(container) {
       }
       return res.json({ ok: true, data: { success: true } });
     } catch (err) {
+      next(err);
+    }
+  });
+
+  // ============================================================
+  // 음성 수집 동의 (Consents) — BACKEND_DB_SPEC.md §3.2, §4.3
+  // 동의를 받는 주체는 기관이다. 앱이 동의 값을 만들 수 있는 경로는 없다.
+  // 이력은 덮어쓰지 않고 쌓는다.
+  // ============================================================
+
+  router.get('/recipients/:id/consents', async (req, res, next) => {
+    try {
+      const { consentRepo, ownerId } = container.repos(req);
+      const data = await consentRepo.listConsents(ownerId, req.params.id);
+      return res.json({ ok: true, data });
+    } catch (err) {
+      if (err && /찾을 수 없/.test(err.message || '')) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: err.message } });
+      }
+      next(err);
+    }
+  });
+
+  router.post('/recipients/:id/consents', async (req, res, next) => {
+    try {
+      const { consentRepo, auditRepo, ownerId } = container.repos(req);
+      const data = await consentRepo.grantConsent(ownerId, req.params.id, req.body || {}, req.user.id);
+
+      await auditRepo.log({
+        ownerId,
+        actorId: req.user.id,
+        action: 'consent.grant',
+        targetType: 'consent',
+        targetId: data.id,
+        payload: { recipientId: req.params.id, voiceConsent: data.voiceConsent },
+        ip: req.ip,
+      });
+
+      return res.status(201).json({ ok: true, data });
+    } catch (err) {
+      if (err && /찾을 수 없/.test(err.message || '')) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: err.message } });
+      }
+      next(err);
+    }
+  });
+
+  router.post('/recipients/:id/consents/:consentId/revoke', async (req, res, next) => {
+    try {
+      const { consentRepo, auditRepo, ownerId } = container.repos(req);
+      const data = await consentRepo.revokeConsent(
+        ownerId,
+        req.params.id,
+        req.params.consentId,
+        (req.body || {}).note
+      );
+
+      await auditRepo.log({
+        ownerId,
+        actorId: req.user.id,
+        action: 'consent.revoke',
+        targetType: 'consent',
+        targetId: req.params.consentId,
+        payload: { recipientId: req.params.id },
+        ip: req.ip,
+      });
+
+      return res.json({ ok: true, data });
+    } catch (err) {
+      if (err && /찾을 수 없/.test(err.message || '')) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: err.message } });
+      }
+      if (err && /이미 철회/.test(err.message || '')) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: err.message } });
+      }
       next(err);
     }
   });

@@ -136,9 +136,38 @@ class PrismaDashboardRepo {
         isUrgent: n.isUrgent,
         link: n.link,
         icon: n.icon,
+        kind: n.kind || null,
         category: isReport ? 'report' : 'care',
       };
     });
+  }
+
+  /**
+   * 소식 발송 (BACKEND_DB_SPEC.md §4.4) — 대시보드에서 만든 소식이
+   * 앱 상단 종 아이콘(GET /notifications)으로 내려간다.
+   */
+  async createNotification(ownerId, { kind, title, content, isUrgent, link, icon }) {
+    const created = await this.prisma.notification.create({
+      data: {
+        ownerId,
+        kind: ['status', 'welfare', 'notice'].includes(kind) ? kind : 'notice',
+        title,
+        content,
+        isUrgent: Boolean(isUrgent),
+        link: link || null,
+        icon: icon || 'info',
+      },
+    });
+    return {
+      id: created.id,
+      kind: created.kind,
+      title: created.title,
+      content: created.content,
+      createdAt: created.createdAt.toISOString(),
+      isUrgent: created.isUrgent,
+      link: created.link,
+      icon: created.icon,
+    };
   }
 
   /**

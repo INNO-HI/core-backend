@@ -30,6 +30,10 @@ const {
   PrismaStatisticsRepo,
   PrismaSettingsRepo,
   PrismaUserRepo,
+  PrismaTaskRepo,
+  PrismaConsentRepo,
+  PrismaRiskRepo,
+  PrismaAuditRepo,
 } = require('./adapters/prisma');
 
 // InMemory 리포지토리 (DB 없이 로컬 테스트용)
@@ -82,6 +86,12 @@ function createContainer(options = {}) {
   const settingsRepo = new PrismaSettingsRepo({ prisma });
   const userRepo = new PrismaUserRepo({ prisma });
 
+  // BACKEND_DB_SPEC.md §7 — 일정/동의/위기 큐/감사 (Prisma 전용)
+  const taskRepo = new PrismaTaskRepo({ prisma });
+  const consentRepo = new PrismaConsentRepo({ prisma });
+  const riskRepo = new PrismaRiskRepo({ prisma });
+  const auditRepo = new PrismaAuditRepo({ prisma });
+
   const dashboardService = new DashboardService();
 
   // MySQL repos — singleton (같은 pool 공유)
@@ -115,6 +125,10 @@ function createContainer(options = {}) {
       statisticsRepo,
       settingsRepo,
       userRepo,
+      taskRepo,
+      consentRepo,
+      riskRepo,
+      auditRepo,
     };
   }
 

@@ -93,6 +93,7 @@ model Manager {
   recipients    Recipient[]
   careLogs      CareLog[]
   visits        Visit[]
+  tasks         Task[]
 
   @@index([centerId])
   @@index([ownerId])
@@ -125,6 +126,13 @@ model Recipient {
   phone         String?
   careStartDate DateTime?
 
+  // BACKEND_DB_SPEC.md §3.1 확장 필드
+  birthDate     DateTime?
+  livingAlone   Boolean?
+  guardianName  String?
+  guardianPhone String?
+  addressDetail String?
+
   managerId String?
   manager   Manager? @relation(fields: [managerId], references: [id], onDelete: SetNull)
 
@@ -142,6 +150,9 @@ model Recipient {
   visits                Visit[]
   memos                 Memo[]
   policyRecommendations RecipientPolicy[]
+  consents              Consent[]
+  tasks                 Task[]
+  riskQueueItems        RiskQueue[]
 
   @@index([managerId])
   @@index([dongId])
@@ -155,7 +166,7 @@ model Recipient {
 
 model CareLog {
   id        String   @id @default(cuid())
-  status    String   @default("pending") // pending | urgent | approved | rejected
+  status    String   @default("pending") // draft | submitted | in_review | pending | urgent | approved | rejected
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -184,13 +195,180 @@ model CareLog {
   photos          Json? // [url, ...]
   rejectionReason String?
 
-  feedbacks Feedback[]
-  visit     Visit?
+  // BACKEND_DB_SPEC.md §3.4 확장 필드
+  // 앱 적재 경로(POST /care-logs)에서는 confirmedById·confirmedAt 필수 —
+  // 사람이 확인하지 않은 기록은 만들어지지 않는다. (기존 시드 행 때문에 DB 레벨은 nullable)
+  mode           String? // liveRecording | postVoiceMemo
+  transcript     String? // 마스킹된 텍스트. 음성 원본을 받는 컬럼은 만들지 않는다
+  summary        String?
+  sessionNo      Int?
+  elapsedSeconds Int? // 실측. 못 쟀으면 null — 기본값을 넣지 않는다
+  confirmedById  String?
+  confirmedAt    DateTime?
+  reviewedById   String?
+  reviewedAt     DateTime?
 
-  @@index([recipientId])
+  feedbacks      Feedback[]
+  visit          Visit?
+  sections       CareLogSection[]
+  riskAssessment RiskAssessment?
+  task           Task?
+
+  @@index([recipientId, visitDate(sort: Desc)])
   @@index([managerId])
+  @@index([ownerId, status])
   @@index([ownerId])
   @@map("care_logs")
+}
+
+// ============================================================
+// AI 정리본 구획 (care_log_sections) — BACKEND_DB_SPEC.md §3.5
+// kind 는 앱의 CareRecordSectionKind 와 1:1
+// ============================================================
+
+model CareLogSection {
+  id        String  @id @default(cuid())
+  careLogId String
+  careLog   CareLog @relation(fields: [careLogId], references: [id], onDelete: Cascade)
+  kind      String // log | notable | risk | nextVisit | followUp | workerInput
+  title     String
+  body      Json // string[] (불릿)
+  sortOrder Int
+
+  @@index([careLogId])
+  @@map("care_log_sections")
+}
+
+// ============================================================
+// 등급 판정 (risk_assessments) — BACKEND_DB_SPEC.md §3.6
+// 등급은 LLM이 아니라 규칙 코드가 정한다. engine_version 으로 재현 가능해야 한다.
+// ============================================================
+
+model RiskAssessment {
+  id               String   @id @default(cuid())
+  careLogId        String   @unique
+  careLog          CareLog  @relation(fields: [careLogId], references: [id], onDelete: Cascade)
+  grade            String // observe | caution | alert | urgent
+  workerGrade      String? // 종사자가 현장에서 고른 값 (하한으로만 사용)
+  escalated        Boolean  @default(false)
+  conflictResolved Boolean  @default(false)
+  rationale        String
+  engineVersion    String
+  createdAt        DateTime @default(now())
+
+  evidence   RiskEvidence[]
+  queueEntry RiskQueue?
+
+  @@map("risk_assessments")
+}
+
+// ============================================================
+// 판정 근거 (risk_evidence) — BACKEND_DB_SPEC.md §3.7
+// span 이 없을 때 신호 이름을 대신 넣지 않는다
+// ============================================================
+
+model RiskEvidence {
+  id           String         @id @default(cuid())
+  assessmentId String
+  assessment   RiskAssessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  signal       String
+  span         String? // 상담 원문 인용. worker_tag 출처면 null
+  grade        String
+  source       String // transcript | worker_tag
+
+  @@index([assessmentId])
+  @@map("risk_evidence")
+}
+
+// ============================================================
+// 위기 큐 (risk_queue) — BACKEND_DB_SPEC.md §3.8
+// 경보(24h)·긴급(4h)만 들어온다. 시간이 지나도 자동 삭제되지 않는다.
+// ============================================================
+
+model RiskQueue {
+  id               String         @id @default(cuid())
+  assessmentId     String         @unique
+  assessment       RiskAssessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  recipientId      String
+  recipient        Recipient      @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  ownerId          String
+  grade            String // alert | urgent
+  raisedAt         DateTime
+  dueAt            DateTime // raised_at + 등급별 시한 (저장해 둔다 — 소급 방지)
+  acknowledgedAt   DateTime?
+  acknowledgedById String?
+  ackNote          String?
+  createdAt        DateTime       @default(now())
+
+  @@index([ownerId, acknowledgedAt, dueAt])
+  @@map("risk_queue")
+}
+
+// ============================================================
+// 방문·전화 일정 (tasks) — BACKEND_DB_SPEC.md §3.3
+// ============================================================
+
+model Task {
+  id          String    @id @default(cuid())
+  type        String // visit | call
+  startAt     DateTime
+  durationMin Int       @default(60)
+  status      String    @default("scheduled") // scheduled | done | canceled
+  recipientId String
+  recipient   Recipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  managerId   String
+  manager     Manager   @relation(fields: [managerId], references: [id], onDelete: Cascade)
+  careLogId   String?   @unique
+  careLog     CareLog?  @relation(fields: [careLogId], references: [id], onDelete: SetNull)
+  ownerId     String
+  createdAt   DateTime  @default(now())
+
+  @@index([managerId, startAt])
+  @@index([ownerId, startAt])
+  @@map("tasks")
+}
+
+// ============================================================
+// 음성 수집 동의 (consents) — BACKEND_DB_SPEC.md §3.2
+// 덮어쓰지 말고 이력으로 쌓는다. 앱에는 현재 유효한 값 하나(voiceConsent)만 내려간다.
+// ============================================================
+
+model Consent {
+  id           String    @id @default(cuid())
+  recipientId  String
+  recipient    Recipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  voiceConsent Boolean
+  grantedAt    DateTime  @default(now())
+  grantedById  String // 기관 담당자 (users.id)
+  revokedAt    DateTime?
+  documentUrl  String? // 서면 동의서 스캔 등
+  note         String?
+  ownerId      String
+  createdAt    DateTime  @default(now())
+
+  @@index([recipientId])
+  @@index([ownerId])
+  @@map("consents")
+}
+
+// ============================================================
+// 감사 로그 (audit_logs) — BACKEND_DB_SPEC.md §3.10
+// 최소: 동의 등록·철회, 위기 큐 확인 처리, 기록 생성·승인
+// ============================================================
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  action     String // login | care_log.create | care_log.approve | risk.ack | consent.grant | consent.revoke …
+  targetType String?
+  targetId   String?
+  payload    Json?
+  ip         String?
+  ownerId    String?
+  createdAt  DateTime @default(now())
+
+  @@index([ownerId, createdAt])
+  @@map("audit_logs")
 }
 
 // ============================================================
@@ -363,6 +541,7 @@ model Notification {
   isUrgent  Boolean  @default(false)
   link      String?
   icon      String?  @default("info")
+  kind      String? // status | welfare | notice (BACKEND_DB_SPEC.md §4.4 세 갈래)
   createdAt DateTime @default(now())
 
   ownerId String

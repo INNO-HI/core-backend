@@ -102,6 +102,13 @@ class PrismaRecipientRepo {
 
     if (!r) return null;
 
+    // 현재 유효한 음성 수집 동의 (스펙 확정 필드명: voiceConsent — §3.2)
+    const activeConsent = await this.prisma.consent.findFirst({
+      where: { ownerId, recipientId: id, voiceConsent: true, revokedAt: null },
+      orderBy: { grantedAt: 'desc' },
+      select: { id: true },
+    });
+
     const now = new Date();
     const monthPromises = [];
     for (let i = 5; i >= 0; i--) {
@@ -136,6 +143,13 @@ class PrismaRecipientRepo {
       age: r.age,
       gender: r.gender,
       status: r.status,
+      // BACKEND_DB_SPEC.md §3.1~3.2 확장 필드
+      voiceConsent: Boolean(activeConsent),
+      birthDate: r.birthDate ? r.birthDate.toISOString().split('T')[0] : null,
+      livingAlone: r.livingAlone ?? null,
+      guardianName: r.guardianName || null,
+      guardianPhone: r.guardianPhone || null,
+      addressDetail: r.addressDetail || null,
       basicInfo: {
         address: r.address || '',
         dong: r.dong?.name || '',
@@ -226,6 +240,11 @@ class PrismaRecipientRepo {
         careStartDate: data.careStartDate ? new Date(data.careStartDate) : null,
         healthInfo: data.healthInfo ?? null,
         emergencyContact: data.emergencyContact ?? null,
+        birthDate: data.birthDate ? new Date(data.birthDate) : null,
+        livingAlone: data.livingAlone ?? null,
+        guardianName: data.guardianName || null,
+        guardianPhone: data.guardianPhone || null,
+        addressDetail: data.addressDetail || null,
       },
     });
 
@@ -249,6 +268,11 @@ class PrismaRecipientRepo {
     }
     if (data.healthInfo !== undefined) patch.healthInfo = data.healthInfo;
     if (data.emergencyContact !== undefined) patch.emergencyContact = data.emergencyContact;
+    if (data.birthDate !== undefined) patch.birthDate = data.birthDate ? new Date(data.birthDate) : null;
+    if (data.livingAlone !== undefined) patch.livingAlone = data.livingAlone;
+    if (data.guardianName !== undefined) patch.guardianName = data.guardianName || null;
+    if (data.guardianPhone !== undefined) patch.guardianPhone = data.guardianPhone || null;
+    if (data.addressDetail !== undefined) patch.addressDetail = data.addressDetail || null;
     if (data.dong !== undefined) patch.dongId = await this._resolveDongId(data.dong);
     if (data.managerName !== undefined || data.manager !== undefined) {
       patch.managerId = await this._resolveManagerId(ownerId, data.managerName || data.manager);
