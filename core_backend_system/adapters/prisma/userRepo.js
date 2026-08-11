@@ -70,8 +70,8 @@ class PrismaUserRepo {
     if (phone !== undefined) patch.phone = phone || null;
     if (role !== undefined && VALID_ROLES.includes(role)) {
       // 마지막 관리자를 강등하지 못하게 보호
-      if (existing.role === 'admin' && role !== 'admin') {
-        const adminCount = await this.prisma.user.count({ where: { role: 'admin' } });
+      if ((existing.role === 'admin' || existing.role === 'master') && role !== 'admin' && role !== 'master') {
+        const adminCount = await this.prisma.user.count({ where: { role: { in: ['admin', 'master'] } } });
         if (adminCount <= 1) {
           throw new Error('마지막 관리자 계정의 권한은 변경할 수 없습니다.');
         }
@@ -137,8 +137,8 @@ class PrismaUserRepo {
     const existing = await this.prisma.user.findUnique({ where: { id } });
     if (!existing) return { success: false, notFound: true };
 
-    if (existing.role === 'admin') {
-      const adminCount = await this.prisma.user.count({ where: { role: 'admin' } });
+    if (existing.role === 'admin' || existing.role === 'master') {
+      const adminCount = await this.prisma.user.count({ where: { role: { in: ['admin', 'master'] } } });
       if (adminCount <= 1) {
         return { success: false, error: '마지막 관리자 계정은 삭제할 수 없습니다.' };
       }

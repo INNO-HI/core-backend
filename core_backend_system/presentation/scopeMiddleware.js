@@ -28,6 +28,13 @@ async function resolveScope(req, res, next) {
     req.user.role = user.role;
     req.user.institutionId = user.institutionId;
 
+    if (user.role === 'master' || user.role === 'admin') {
+      // 마스터는 전 기관 데이터를 보고 수정한다 — ownerId 무제한 매칭
+      req.ownerScope = { not: '' };
+      req.callerManagerId = null;
+      return next();
+    }
+
     if (user.institutionId) {
       const members = await prisma.user.findMany({
         where: { institutionId: user.institutionId },

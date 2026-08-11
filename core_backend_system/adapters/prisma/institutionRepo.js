@@ -48,6 +48,28 @@ class PrismaInstitutionRepo {
     return this._serialize(created);
   }
 
+  async update(id, { name, code, address, phone } = {}) {
+    const existing = await this.prisma.institution.findUnique({ where: { id } });
+    if (!existing) return null;
+    const patch = {};
+    if (name !== undefined) {
+      const trimmed = String(name).trim();
+      if (!trimmed) throw new Error('기관 이름은 필수입니다.');
+      patch.name = trimmed;
+    }
+    if (code !== undefined) {
+      const normalizedCode = String(code).trim();
+      if (!/^\d{4}$/.test(normalizedCode)) throw new Error('기관 코드는 4자리 숫자여야 합니다.');
+      const dup = await this.prisma.institution.findUnique({ where: { code: normalizedCode } });
+      if (dup && dup.id !== id) throw new Error('이미 사용 중인 기관 코드입니다.');
+      patch.code = normalizedCode;
+    }
+    if (address !== undefined) patch.address = address || null;
+    if (phone !== undefined) patch.phone = phone || null;
+    const updated = await this.prisma.institution.update({ where: { id }, data: patch });
+    return this._serialize(updated);
+  }
+
   async remove(id) {
     const existing = await this.prisma.institution.findUnique({ where: { id } });
     if (!existing) return { success: false, notFound: true };
@@ -60,18 +82,68 @@ class PrismaInstitutionRepo {
   async listCenters() {
     const items = await this.prisma.center.findMany({
       orderBy: { name: 'asc' },
-      include: { _count: { select: { managers: true } } },
+      include: {
+        _count: { select: { managers: true } },
+        institution: { select: { id: true, name: true } },
+      },
     });
-    return items.map((c) => ({ id: c.id, name: c.name, managerCount: c._count.managers }));
+    return items.map((c) => ({
+      id: c.id,
+      name: c.name,
+      managerCount: c._count.managers,
+      institutionId: c.institution?.id || null,
+      institutionName: c.institution?.name || null, // null = 무소속 (옛 시드 잔재)
+    }));
   }
 
-  async createCenter({ name } = {}) {
+  async createCenter({ name, institutionId } = {}) {
     const trimmed = String(name || '').trim();
     if (!trimmed) throw new Error('센터 이름은 필수입니다.');
     const existing = await this.prisma.center.findUnique({ where: { name: trimmed } });
     if (existing) throw new Error('이미 등록된 센터 이름입니다.');
-    const created = await this.prisma.center.create({ data: { name: trimmed } });
-    return { id: created.id, name: created.name, managerCount: 0 };
+
+    // 소속 기관 검증 (센터는 기관에 속한다)
+    let inst = null;
+    if (institutionId) {
+      inst = await this.prisma.institution.findUnique({ where: { id: institutionId } });
+      if (!inst) throw new Error('소속 기관을 찾을 수 없습니다.');
+    }
+
+    const created = await this.prisma.center.create({
+      data: { name: trimmed, institutionId: inst?.id || null },
+    });
+    return {
+      id: created.id,
+      name: created.name,
+      managerCount: 0,
+      institutionId: inst?.id || null,
+      institutionName: inst?.name || null,
+    };
+  }
+
+  async updateCenter(id, { name, institutionId } = {}) {
+    const existing = await this.prisma.center.findUnique({ where: { id } });
+    if (!existing) return null;
+    const patch = {};
+    if (name !== undefined) {
+      const trimmed = String(name).trim();
+      if (!trimmed) throw new Error('센터 이름은 필수입니다.');
+      const dup = await this.prisma.center.findUnique({ where: { name: trimmed } });
+      if (dup && dup.id !== id) throw new Error('이미 등록된 센터 이름입니다.');
+      patch.name = trimmed;
+    }
+    if (institutionId !== undefined) {
+      if (institutionId) {
+        const inst = await this.prisma.institution.findUnique({ where: { id: institutionId } });
+        if (!inst) throw new Error('소속 기관을 찾을 수 없습니다.');
+        patch.institutionId = inst.id;
+      } else {
+        patch.institutionId = null;
+      }
+    }
+    await this.prisma.center.update({ where: { id }, data: patch });
+    const rows = await this.listCenters();
+    return rows.find((c) => c.id === id) || null;
   }
 
   async removeCenter(id) {

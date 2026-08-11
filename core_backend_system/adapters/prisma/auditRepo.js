@@ -11,6 +11,67 @@ class PrismaAuditRepo {
     this.prisma = prisma;
   }
 
+  /** 감사 기록 조회 (마스터 콘솔) — 행위자 이메일을 붙여 내려준다 */
+  async list({ action, limit = 100 } = {}) {
+    const where = {};
+    if (action && action !== 'all') where.action = { startsWith: action };
+
+    const items = await this.prisma.auditLog.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(Number(limit) || 100, 500),
+    });
+
+    const actorIds = [...new Set(items.map((i) => i.actorId).filter(Boolean))];
+    const actors = actorIds.length
+      ? await this.prisma.user.findMany({
+          where: { id: { in: actorIds } },
+          select: { id: true, email: true, name: true },
+        })
+      : [];
+    const actorOf = (id) => actors.find((a) => a.id === id) || null;
+
+    return items.map((i) => ({
+      id: i.id,
+      action: i.action,
+      actorId: i.actorId,
+      actorEmail: actorOf(i.actorId)?.email || null,
+      actorName: actorOf(i.actorId)?.name || null,
+      targetType: i.targetType,
+      targetId: i.targetId,
+      payload: i.payload ?? null,
+      ip: i.ip,
+      createdAt: i.createdAt.toISOString(),
+    }));
+  }
+
+  /** 전역 운영 현황 (마스터 콘솔 KPI) */
+  async systemOverview() {
+    const now = new Date();
+    const [institutions, centers, users, recipients, careLogs, openRisk, overdueRisk, masters, institutionsRole, caregivers] =
+      await Promise.all([
+        this.prisma.institution.count(),
+        this.prisma.center.count(),
+        this.prisma.user.count(),
+        this.prisma.recipient.count(),
+        this.prisma.careLog.count(),
+        this.prisma.riskQueue.count({ where: { acknowledgedAt: null } }),
+        this.prisma.riskQueue.count({ where: { acknowledgedAt: null, dueAt: { lt: now } } }),
+        this.prisma.user.count({ where: { role: { in: ['master', 'admin'] } } }),
+        this.prisma.user.count({ where: { role: { in: ['institution', 'user'] } } }),
+        this.prisma.user.count({ where: { role: 'caregiver' } }),
+      ]);
+    return {
+      institutions,
+      centers,
+      users,
+      usersByRole: { master: masters, institution: institutionsRole, caregiver: caregivers },
+      recipients,
+      careLogs,
+      risk: { open: openRisk, overdue: overdueRisk },
+    };
+  }
+
   async log({ ownerId, actorId, action, targetType, targetId, payload, ip }) {
     try {
       await this.prisma.auditLog.create({

@@ -55,6 +55,10 @@ model Center {
   id   String @id @default(cuid())
   name String @unique
 
+  // 센터는 기관 소속이다 (무소속은 옛 시드 잔재 — 콘솔에서 정리)
+  institutionId String?
+  institution   Institution? @relation(fields: [institutionId], references: [id], onDelete: SetNull)
+
   managers Manager[]
   careLogs CareLog[]
 
@@ -544,7 +548,8 @@ model Institution {
   address   String?
   createdAt DateTime @default(now())
 
-  users User[]
+  users   User[]
+  centers Center[]
 
   @@map("institutions")
 }

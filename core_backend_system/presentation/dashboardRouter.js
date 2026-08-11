@@ -98,6 +98,7 @@ const RECIPIENT_FIELDS = new Set([
   'name', 'age', 'gender', 'status', 'dong', 'managerId', 'managerName', 'manager',
   'phone', 'address', 'careStartDate', 'healthInfo', 'emergencyContact',
   'birthDate', 'livingAlone', 'guardianName', 'guardianPhone', 'addressDetail',
+  'ownerUserId', // 마스터 콘솔 전용 — 생성될 대상자의 소유 계정 지정
 ]);
 
 function unknownRecipientFields(body) {
@@ -689,8 +690,15 @@ function createDashboardRouter(container) {
       if (!name || !String(name).trim()) {
         return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: '이름은 필수입니다.' } });
       }
-      const { managerRepo, ownerId, writerId } = container.repos(req);
-      const data = await managerRepo.createManager(ownerId, req.body || {}, writerId);
+      const { managerRepo, ownerId, writerId, callerRole } = container.repos(req);
+      const body = { ...(req.body || {}) };
+      // 마스터는 소유 계정을 지정해 만든다 — 해당 기관 워크스페이스에 보이게
+      let effectiveWriter = writerId;
+      if (body.ownerUserId && (callerRole === 'master' || callerRole === 'admin')) {
+        effectiveWriter = String(body.ownerUserId);
+      }
+      delete body.ownerUserId;
+      const data = await managerRepo.createManager(ownerId, body, effectiveWriter);
       return res.status(201).json({ ok: true, data });
     } catch (err) {
       next(err);
@@ -835,8 +843,15 @@ function createDashboardRouter(container) {
           error: { code: 'BAD_REQUEST', message: `지원하지 않는 필드입니다: ${unknown.join(', ')}. 담당자 배정은 managerId를 사용하세요.` },
         });
       }
-      const { recipientRepo, ownerId, writerId } = container.repos(req);
-      const data = await recipientRepo.createRecipient(ownerId, req.body || {}, writerId);
+      const { recipientRepo, ownerId, writerId, callerRole } = container.repos(req);
+      const body = { ...(req.body || {}) };
+      // 마스터는 소유 계정을 지정해 만든다 — 지정한 기관 워크스페이스에 보이게
+      let effectiveWriter = writerId;
+      if (body.ownerUserId && (callerRole === 'master' || callerRole === 'admin')) {
+        effectiveWriter = String(body.ownerUserId);
+      }
+      delete body.ownerUserId;
+      const data = await recipientRepo.createRecipient(ownerId, body, effectiveWriter);
       return res.status(201).json({ ok: true, data });
     } catch (err) {
       if (err && /찾을 수 없/.test(err.message || '')) {
@@ -1339,6 +1354,22 @@ function createDashboardRouter(container) {
     }
   });
 
+  router.patch('/institutions/:id', requireAdmin, async (req, res, next) => {
+    try {
+      const { institutionRepo } = container.repos(req);
+      const data = await institutionRepo.update(req.params.id, req.body || {});
+      if (!data) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '기관을 찾을 수 없습니다' } });
+      }
+      return res.json({ ok: true, data });
+    } catch (err) {
+      if (err && /필수|4자리|사용 중/.test(err.message || '')) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: err.message } });
+      }
+      next(err);
+    }
+  });
+
   router.delete('/institutions/:id', requireAdmin, async (req, res, next) => {
     try {
       const { institutionRepo } = container.repos(req);
@@ -1347,6 +1378,30 @@ function createDashboardRouter(container) {
         return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '기관을 찾을 수 없습니다' } });
       }
       return res.json({ ok: true, data: { success: true } });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ============================================================
+  // 마스터 콘솔 — 전역 현황·감사 기록
+  // ============================================================
+
+  router.get('/master/overview', requireAdmin, async (req, res, next) => {
+    try {
+      const { auditRepo } = container.repos(req);
+      return res.json({ ok: true, data: await auditRepo.systemOverview() });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // 감사 기록 열람 — 권한 부여·변경·말소 내역은 법정 3년 보관 대상 (PERMISSIONS.md §2.1)
+  router.get('/audit-logs', requireCapability('account:grant'), async (req, res, next) => {
+    try {
+      const { auditRepo } = container.repos(req);
+      const data = await auditRepo.list({ action: req.query.action, limit: req.query.limit });
+      return res.json({ ok: true, data });
     } catch (err) {
       next(err);
     }
@@ -1372,6 +1427,22 @@ function createDashboardRouter(container) {
       return res.status(201).json({ ok: true, data });
     } catch (err) {
       if (err && /필수|이미 등록/.test(err.message || '')) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: err.message } });
+      }
+      next(err);
+    }
+  });
+
+  router.patch('/centers/:id', requireAdmin, async (req, res, next) => {
+    try {
+      const { institutionRepo } = container.repos(req);
+      const data = await institutionRepo.updateCenter(req.params.id, req.body || {});
+      if (!data) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '센터를 찾을 수 없습니다' } });
+      }
+      return res.json({ ok: true, data });
+    } catch (err) {
+      if (err && /필수|이미 등록|찾을 수 없/.test(err.message || '')) {
         return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: err.message } });
       }
       next(err);
