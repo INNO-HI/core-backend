@@ -493,6 +493,34 @@ function createDashboardRouter(container) {
   });
 
   // ============================================================
+  // 심리케어 분석 (Analysis) — 프론트 main 계보 위기 케이스 화면 계약
+  // risk_queue·risk_assessments 데이터를 CrisisCase 형태로 서빙한다.
+  // ============================================================
+
+  router.get('/analysis/crisis-cases', async (req, res, next) => {
+    try {
+      const { analysisRepo, ownerId } = container.repos(req);
+      const data = await analysisRepo.listCrisisCases(ownerId);
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.get('/analysis/crisis-cases/:id', async (req, res, next) => {
+    try {
+      const { analysisRepo, ownerId } = container.repos(req);
+      const data = await analysisRepo.getCrisisCaseDetail(ownerId, req.params.id);
+      if (!data) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '위기 케이스를 찾을 수 없습니다' } });
+      }
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ============================================================
   // 매니저 (Managers)
   // ============================================================
 

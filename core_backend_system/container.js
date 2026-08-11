@@ -34,6 +34,7 @@ const {
   PrismaConsentRepo,
   PrismaRiskRepo,
   PrismaAuditRepo,
+  PrismaAnalysisRepo,
 } = require('./adapters/prisma');
 
 // InMemory 리포지토리 (DB 없이 로컬 테스트용)
@@ -91,6 +92,7 @@ function createContainer(options = {}) {
   const consentRepo = new PrismaConsentRepo({ prisma });
   const riskRepo = new PrismaRiskRepo({ prisma });
   const auditRepo = new PrismaAuditRepo({ prisma });
+  const analysisRepo = new PrismaAnalysisRepo({ prisma });
 
   const dashboardService = new DashboardService();
 
@@ -129,6 +131,7 @@ function createContainer(options = {}) {
       consentRepo,
       riskRepo,
       auditRepo,
+      analysisRepo,
     };
   }
 
