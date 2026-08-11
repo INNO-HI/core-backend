@@ -9,6 +9,8 @@
  */
 
 const { verifyToken } = require('../lib/auth');
+const { prisma } = require('../lib/prisma');
+const { hasCapability } = require('../lib/capabilities');
 
 function requireAuth(req, res, next) {
   const header = req.headers['authorization'] || '';
@@ -41,10 +43,10 @@ function requireAuth(req, res, next) {
 
 /**
  * 관리자 전용 미들웨어 — requireAuth 이후에 사용.
- * req.user.role 이 'admin' 이 아니면 403.
+ * legacy 'admin' 과 신설 'master' 를 관리자로 본다.
  */
 function requireAdmin(req, res, next) {
-  if (req.user?.role !== 'admin') {
+  if (req.user?.role !== 'admin' && req.user?.role !== 'master') {
     return res.status(403).json({
       ok: false,
       error: { code: 'FORBIDDEN', message: '관리자 권한이 필요합니다.' },
@@ -53,4 +55,36 @@ function requireAdmin(req, res, next) {
   return next();
 }
 
-module.exports = { requireAuth, requireAdmin };
+/**
+ * 능력(capability) 가드 — requireAuth 이후에 사용 (PERMISSIONS.md).
+ * 계정별 grant/revoke 가 즉시 반영되도록 토큰이 아니라 DB에서 계산한다.
+ * 실제 권한 = rolePreset(role) + grants − revokes
+ */
+function requireCapability(capability) {
+  return async function capabilityGuard(req, res, next) {
+    try {
+      const user = await prisma.user.findUnique({
+        where: { id: req.user.id },
+        select: { id: true, role: true, capabilityGrants: true },
+      });
+      if (!user) {
+        return res.status(401).json({
+          ok: false,
+          error: { code: 'UNAUTHORIZED', message: '계정을 찾을 수 없습니다. 다시 로그인해 주세요.' },
+        });
+      }
+      if (!hasCapability(user, capability)) {
+        return res.status(403).json({
+          ok: false,
+          error: { code: 'FORBIDDEN', message: '이 작업을 할 권한이 없습니다.' },
+        });
+      }
+      req.user.role = user.role; // 최신 역할로 갱신
+      return next();
+    } catch (err) {
+      return next(err);
+    }
+  };
+}
+
+module.exports = { requireAuth, requireAdmin, requireCapability };

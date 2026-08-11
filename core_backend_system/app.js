@@ -32,12 +32,23 @@ function createCoreApp(options = {}) {
   app.use(express.urlencoded({ extended: true }));
 
   // ── Rate Limiting ────────────────────────────────────────────
-  // 로그인/회원가입 엔드포인트: 15분에 최대 20회 (브루트포스 방어)
+  // 인증 엔드포인트: 15분에 60회 (BACKEND_REQUEST §3 — 심사관의 정상 동선이
+  // 20회를 쉽게 넘긴다. Apple 리뷰어는 공용 출구 IP를 쓴다.)
+  // - skipFailedRequests: 실패(4xx)·차단(429) 응답은 카운트에서 뺀다 —
+  //   "기다리는 동안 확인하려고 다시 부르면 잠금이 연장"되는 문제를 막는다.
+  //   브루트포스 방어는 서비스 레벨 계정 잠금(5회 실패 시 5분)이 따로 한다.
+  // - AUTH_RATELIMIT_SKIP_IPS: 심사용 IP 예외 (쉼표 구분)
+  const authSkipIps = String(process.env.AUTH_RATELIMIT_SKIP_IPS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 20,
+    max: Number(process.env.AUTH_RATELIMIT_MAX || 60),
     standardHeaders: true,
     legacyHeaders: false,
+    skipFailedRequests: true,
+    skip: (req) => authSkipIps.includes(req.ip),
     message: {
       ok: false,
       error: { code: 'TOO_MANY_REQUESTS', message: '요청이 너무 많습니다. 15분 후 다시 시도해주세요.' },

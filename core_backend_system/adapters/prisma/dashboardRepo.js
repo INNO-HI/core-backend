@@ -218,12 +218,26 @@ class PrismaDashboardRepo {
       take: limit,
     });
 
+    // §4 — 목록에 content 를 함께 싣는다. 제목만 있으면 앱이 본문을 못 보여준다
     return items.map((item) => ({
       id: item.id,
       title: item.title,
       date: item.date,
       isNew: item.isNew,
+      content: item.content || '',
     }));
+  }
+
+  async getNoticeById(_ownerId, id) {
+    const item = await this.prisma.notice.findUnique({ where: { id } });
+    if (!item) return null;
+    return {
+      id: item.id,
+      title: item.title,
+      date: item.date,
+      isNew: item.isNew,
+      content: item.content || '',
+    };
   }
 
   /**

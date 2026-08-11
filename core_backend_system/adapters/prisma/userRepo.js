@@ -6,8 +6,9 @@
  */
 
 const { hashPassword } = require('../../lib/auth');
+const { resolveCapabilities, parseGrants, ALL_CAPABILITIES, ROLE_PRESETS } = require('../../lib/capabilities');
 
-const VALID_ROLES = ['admin', 'user', 'manager'];
+const VALID_ROLES = ['admin', 'user', 'manager', 'master', 'institution', 'caregiver'];
 
 class PrismaUserRepo {
   constructor({ prisma }) {
@@ -92,6 +93,41 @@ class PrismaUserRepo {
     const hashed = await hashPassword(newPassword);
     await this.prisma.user.update({ where: { id }, data: { password: hashed } });
     return { success: true };
+  }
+
+  /** 계정별 권한 조회 (PERMISSIONS.md — 실제 권한 = preset + grants − revokes) */
+  async getCapabilities(id) {
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true, email: true, name: true, role: true, capabilityGrants: true },
+    });
+    if (!user) return null;
+    const { grants, revokes } = parseGrants(user.capabilityGrants);
+    return {
+      userId: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      preset: ROLE_PRESETS[user.role] ?? [],
+      grants,
+      revokes,
+      capabilities: resolveCapabilities(user),
+      allCapabilities: ALL_CAPABILITIES,
+    };
+  }
+
+  /** 계정별 권한 조정 저장 — 마스터가 계정마다 능력을 열고 닫는다 */
+  async setCapabilities(id, { grants, revokes } = {}) {
+    const existing = await this.prisma.user.findUnique({ where: { id }, select: { id: true } });
+    if (!existing) return null;
+
+    const clean = (arr) =>
+      Array.isArray(arr) ? arr.filter((c) => ALL_CAPABILITIES.includes(c)) : [];
+    await this.prisma.user.update({
+      where: { id },
+      data: { capabilityGrants: { grants: clean(grants), revokes: clean(revokes) } },
+    });
+    return this.getCapabilities(id);
   }
 
   async deleteUser(currentUserId, id) {

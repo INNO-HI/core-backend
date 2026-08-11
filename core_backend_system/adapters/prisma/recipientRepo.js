@@ -2,6 +2,20 @@
  * PostgreSQL Recipient Repository (Prisma) — ownerId 격리
  */
 
+/** birthDate 로 만 나이 계산 (BACKEND_REQUEST §7 — age 0 방지). 못 구하면 저장값 사용 */
+function computeAge(birthDate, storedAge) {
+  if (!birthDate) return storedAge ?? 0;
+  const birth = new Date(birthDate);
+  if (isNaN(birth.getTime())) return storedAge ?? 0;
+  const now = new Date();
+  let age = now.getFullYear() - birth.getFullYear();
+  const beforeBirthday =
+    now.getMonth() < birth.getMonth() ||
+    (now.getMonth() === birth.getMonth() && now.getDate() < birth.getDate());
+  if (beforeBirthday) age--;
+  return Math.max(age, 0);
+}
+
 class PrismaRecipientRepo {
   constructor({ prisma }) {
     this.prisma = prisma;
@@ -44,7 +58,7 @@ class PrismaRecipientRepo {
       where,
       include: {
         dong: { select: { name: true } },
-        manager: { select: { name: true } },
+        manager: { select: { id: true, name: true } },
       },
       orderBy: { name: 'asc' },
     });
@@ -53,10 +67,13 @@ class PrismaRecipientRepo {
       recipients: recipients.map((r) => ({
         id: r.id,
         name: r.name,
-        age: r.age,
+        age: computeAge(r.birthDate, r.age),
+        birthDate: r.birthDate ? r.birthDate.toISOString().split('T')[0] : null,
         gender: r.gender,
         dong: r.dong?.name || '',
         address: r.address || '',
+        // §5 — 목록·상세 같은 이름: manager 객체({id, name})로 통일. managerName 은 호환 유지
+        manager: r.manager ? { id: r.manager.id, name: r.manager.name } : null,
         managerName: r.manager?.name || '',
         lastVisitDate: r.lastVisitDate ? r.lastVisitDate.toISOString() : null,
         visitCount: r.visitCount,
@@ -140,7 +157,7 @@ class PrismaRecipientRepo {
     return {
       id: r.id,
       name: r.name,
-      age: r.age,
+      age: computeAge(r.birthDate, r.age),
       gender: r.gender,
       status: r.status,
       // BACKEND_DB_SPEC.md §3.1~3.2 확장 필드
@@ -215,16 +232,48 @@ class PrismaRecipientRepo {
     return m?.id || null;
   }
 
+  /**
+   * 담당자 지정 해석 (BACKEND_REQUEST §1)
+   * managerId(권장)를 우선 받고, 이름(managerName/manager)도 하위호환으로 받는다.
+   * 잘못된 id·이름이면 조용히 null 로 넘기지 않고 에러를 던진다 —
+   * "200을 주면서 반영하지 않는" 것이 §1이 지적한 문제다.
+   */
+  async _resolveManagerAssignment(ownerId, data) {
+    if (data.managerId !== undefined) {
+      if (data.managerId === null || data.managerId === '') return null; // 배정 해제
+      const m = await this.prisma.manager.findFirst({
+        where: { id: String(data.managerId), ownerId },
+        select: { id: true },
+      });
+      if (!m) throw new Error('managerId에 해당하는 담당자를 찾을 수 없습니다.');
+      return m.id;
+    }
+    const name = data.managerName ?? data.manager;
+    if (name === undefined) return undefined; // 변경 요청 없음
+    if (name === null || name === '') return null;
+    // 이름 대신 id 를 이 필드로 보낸 경우도 받아준다 (앱팀이 실제로 그렇게 시도했다)
+    const byId = await this.prisma.manager.findFirst({
+      where: { id: String(name), ownerId },
+      select: { id: true },
+    });
+    if (byId) return byId.id;
+    const byName = await this.prisma.manager.findFirst({
+      where: { ownerId, name: String(name) },
+      select: { id: true },
+    });
+    if (!byName) throw new Error('해당 이름·id의 담당자를 찾을 수 없습니다.');
+    return byName.id;
+  }
+
   /** 대상자 생성 */
   async createRecipient(ownerId, data = {}) {
     if (!data.name || !String(data.name).trim()) {
       throw new Error('이름은 필수입니다.');
     }
 
-    const [dongId, managerId] = await Promise.all([
-      this._resolveDongId(data.dong),
-      this._resolveManagerId(ownerId, data.managerName || data.manager),
-    ]);
+    const dongId = await this._resolveDongId(data.dong);
+    const resolvedManagerId = await this._resolveManagerAssignment(ownerId, data);
+    const managerId = resolvedManagerId === undefined ? null : resolvedManagerId;
 
     const created = await this.prisma.recipient.create({
       data: {
@@ -274,9 +323,8 @@ class PrismaRecipientRepo {
     if (data.guardianPhone !== undefined) patch.guardianPhone = data.guardianPhone || null;
     if (data.addressDetail !== undefined) patch.addressDetail = data.addressDetail || null;
     if (data.dong !== undefined) patch.dongId = await this._resolveDongId(data.dong);
-    if (data.managerName !== undefined || data.manager !== undefined) {
-      patch.managerId = await this._resolveManagerId(ownerId, data.managerName || data.manager);
-    }
+    const resolvedManagerId = await this._resolveManagerAssignment(ownerId, data);
+    if (resolvedManagerId !== undefined) patch.managerId = resolvedManagerId;
 
     await this.prisma.recipient.update({ where: { id }, data: patch });
     return this.getRecipientById(ownerId, id);

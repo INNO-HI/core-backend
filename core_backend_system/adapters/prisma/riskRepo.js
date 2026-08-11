@@ -37,6 +37,9 @@ class PrismaRiskRepo {
       acknowledgedByName,
       ackNote: item.ackNote || null,
       createdAt: item.createdAt.toISOString(),
+      // 앱 요청서(§10) 편의 별칭
+      acknowledged: Boolean(item.acknowledgedAt),
+      reason: item.assessment?.rationale || null,
     };
   }
 
@@ -47,7 +50,7 @@ class PrismaRiskRepo {
       orderBy: [{ acknowledgedAt: { sort: 'asc', nulls: 'first' } }, { dueAt: 'asc' }],
       include: {
         recipient: { select: { name: true } },
-        assessment: { select: { careLogId: true } },
+        assessment: { select: { careLogId: true, rationale: true } },
       },
       take: 500,
     });
@@ -74,7 +77,7 @@ class PrismaRiskRepo {
       },
       include: {
         recipient: { select: { name: true } },
-        assessment: { select: { careLogId: true } },
+        assessment: { select: { careLogId: true, rationale: true } },
       },
     });
     return this._serialize(updated);

@@ -22,10 +22,17 @@ model User {
   password      String
   name          String
   phone         String?
-  role          String   @default("user") // user | manager | admin
+  role          String   @default("user") // user(legacy) | admin(legacy) | master | institution | caregiver
   emailVerified Boolean  @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+
+  // 소속 기관 (BACKEND_REQUEST §8)
+  institutionId String?
+  institution   Institution? @relation(fields: [institutionId], references: [id], onDelete: SetNull)
+
+  // 계정별 권한 조정 (PERMISSIONS.md — 실제 권한 = rolePreset + grants − revokes)
+  capabilityGrants Json? // { "grants": string[], "revokes": string[] }
 
   feedbacks     Feedback[]
   memos         Memo[]
@@ -520,11 +527,65 @@ model WelfareNews {
 // 공지사항 (전역 reference data — 모든 계정 공유)
 // ============================================================
 
+// ============================================================
+// 기관 (BACKEND_REQUEST §8 — institutionCode 검증)
+// 가입 시 4자리 코드로 소속 기관을 특정한다
+// ============================================================
+
+model Institution {
+  id        String   @id @default(cuid())
+  name      String
+  code      String   @unique // 발급한 4자리 코드
+  phone     String?
+  address   String?
+  createdAt DateTime @default(now())
+
+  users User[]
+
+  @@map("institutions")
+}
+
+// ============================================================
+// 이메일 인증 코드 (BACKEND_REQUEST §2)
+// 코드는 응답에 담지 않는다 — 메일로만 보낸다. 무작위 + 만료 + 시도 제한
+// ============================================================
+
+model EmailVerification {
+  id         String    @id @default(cuid())
+  email      String
+  codeHash   String
+  expiresAt  DateTime
+  attempts   Int       @default(0)
+  verifiedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([email, createdAt])
+  @@map("email_verifications")
+}
+
+// ============================================================
+// 비밀번호 재설정 토큰 (BACKEND_REQUEST §9)
+// 일회용 토큰을 메일로 보내고, 그 토큰과 함께 온 요청만 받는다
+// ============================================================
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
 model Notice {
   id        String   @id @default(cuid())
   title     String
   date      String
   isNew     Boolean  @default(false)
+  content   String? // 본문 (BACKEND_REQUEST §4 — 제목만 있으면 앱이 내용을 못 보여준다)
   createdAt DateTime @default(now())
 
   @@map("notices")

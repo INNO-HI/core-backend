@@ -7,7 +7,101 @@
  */
 
 const express = require('express');
-const { requireAuth, requireAdmin } = require('./authMiddleware');
+const { requireAuth, requireAdmin, requireCapability } = require('./authMiddleware');
+
+// ── 앱 요청 모양 정규화 (BACKEND_REQUEST §11 — 서버가 양쪽 모양을 수용한다) ──
+
+const GRADE_ALIASES = {
+  긴급: 'urgent',
+  경보: 'alert',
+  주의: 'caution',
+  관찰: 'observe',
+  emergency: 'urgent',
+  urgent: 'urgent',
+  alert: 'alert',
+  caution: 'caution',
+  observe: 'observe',
+};
+
+function normalizeGrade(value) {
+  return GRADE_ALIASES[String(value || '').trim()] || null;
+}
+
+/**
+ * 앱 평면 모양(top-level grade·signals·evidence, sections.bullets, 한국어 등급)을
+ * 내부 모양(risk 객체, sections.body, 영문 등급)으로 변환한다.
+ * 대시보드가 쓰는 내부 모양은 그대로 통과한다.
+ */
+function normalizeCareLogPayload(body) {
+  const p = { ...(body || {}) };
+
+  if (Array.isArray(p.sections)) {
+    p.sections = p.sections.map((s, i) => ({
+      kind: s.kind,
+      title: s.title,
+      body: Array.isArray(s.body) ? s.body : Array.isArray(s.bullets) ? s.bullets : [],
+      sortOrder: s.sortOrder ?? i,
+    }));
+  }
+
+  if (!p.risk && (p.grade || p.signals || p.evidence)) {
+    const grade = normalizeGrade(p.grade);
+    if (grade) {
+      const signals = Array.isArray(p.signals) ? p.signals : [];
+      const evidence = (Array.isArray(p.evidence) ? p.evidence : []).map((e) => ({
+        signal: e.signal,
+        span: e.span ?? null,
+        grade: normalizeGrade(e.grade) || grade,
+        source: e.source === 'worker_tag' ? 'worker_tag' : 'transcript',
+      }));
+      p.risk = {
+        grade,
+        workerGrade: normalizeGrade(p.workerGrade),
+        escalated: Boolean(p.escalated),
+        conflictResolved: false,
+        rationale:
+          p.rationale ||
+          (signals.length ? `${signals.join(', ')} 신호가 확인되었습니다.` : '앱에서 확인된 판정'),
+        engineVersion: p.engineVersion || 'app-v1',
+        evidence: evidence.length
+          ? evidence
+          : signals.map((s) => ({ signal: s, span: null, grade, source: 'worker_tag' })),
+      };
+    }
+    delete p.grade;
+    delete p.signals;
+    delete p.evidence;
+    delete p.workerGrade;
+    delete p.rationale;
+    delete p.engineVersion;
+    delete p.escalated;
+  } else if (p.risk && p.risk.grade) {
+    const grade = normalizeGrade(p.risk.grade) || p.risk.grade;
+    p.risk = {
+      ...p.risk,
+      grade,
+      workerGrade: normalizeGrade(p.risk.workerGrade) || p.risk.workerGrade || null,
+      evidence: Array.isArray(p.risk.evidence)
+        ? p.risk.evidence.map((e) => ({ ...e, grade: normalizeGrade(e.grade) || grade }))
+        : [],
+    };
+  }
+
+  delete p.confirmedBy; // 확인자는 토큰 사용자 — 몸통 값을 믿지 않는다
+  return p;
+}
+
+// ── 대상자 필드 엄격 검증 (BACKEND_REQUEST §1 — 받지 않는 필드는 400) ──
+
+const RECIPIENT_FIELDS = new Set([
+  'name', 'age', 'gender', 'status', 'dong', 'managerId', 'managerName', 'manager',
+  'phone', 'address', 'careStartDate', 'healthInfo', 'emergencyContact',
+  'birthDate', 'livingAlone', 'guardianName', 'guardianPhone', 'addressDetail',
+]);
+
+function unknownRecipientFields(body) {
+  return Object.keys(body || {}).filter((k) => !RECIPIENT_FIELDS.has(k));
+}
 
 function createDashboardRouter(container) {
   const router = express.Router();
@@ -228,7 +322,7 @@ function createDashboardRouter(container) {
   });
 
   // 일정 배포 (대시보드) — tasks 는 대시보드가 만들고 앱은 읽는다
-  router.post('/tasks', async (req, res, next) => {
+  router.post('/tasks', requireCapability('manager:assign'), async (req, res, next) => {
     try {
       const { recipientId, startAt } = req.body || {};
       if (!recipientId || !startAt) {
@@ -279,6 +373,20 @@ function createDashboardRouter(container) {
     }
   });
 
+  // 공지 상세 (BACKEND_REQUEST §4)
+  router.get('/notices/:id', async (req, res, next) => {
+    try {
+      const { dashboardRepo, ownerId } = container.repos(req);
+      const data = await dashboardRepo.getNoticeById(ownerId, req.params.id);
+      if (!data) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '공지사항을 찾을 수 없습니다' } });
+      }
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   // ============================================================
   // 돌봄 일지 (Care Logs)
   // ============================================================
@@ -308,9 +416,10 @@ function createDashboardRouter(container) {
    * care_log + sections + risk_assessment + evidence 를 한 트랜잭션으로 넣고,
    * 경보 이상이면 risk_queue 에 올린다. confirmedBy = 토큰 사용자.
    */
-  router.post('/care-logs', async (req, res, next) => {
+  router.post('/care-logs', requireCapability('careLog:write'), async (req, res, next) => {
     try {
-      const { recipientId, visitedAt } = req.body || {};
+      const payload = normalizeCareLogPayload(req.body);
+      const { recipientId, visitedAt } = payload;
       if (!recipientId || !visitedAt) {
         return res.status(400).json({
           ok: false,
@@ -319,7 +428,7 @@ function createDashboardRouter(container) {
       }
 
       const { careLogRepo, auditRepo, ownerId } = container.repos(req);
-      const data = await careLogRepo.createFromApp(ownerId, req.body, req.user.id);
+      const data = await careLogRepo.createFromApp(ownerId, payload, req.user.id);
 
       await auditRepo.log({
         ownerId,
@@ -353,7 +462,7 @@ function createDashboardRouter(container) {
     }
   });
 
-  router.patch('/care-logs/bulk-status', async (req, res, next) => {
+  router.patch('/care-logs/bulk-status', requireCapability('careLog:approve'), async (req, res, next) => {
     try {
       const { ids, status } = req.body;
       // 스펙 검토 흐름: submitted → in_review → approved | rejected (§4.2)
@@ -379,7 +488,7 @@ function createDashboardRouter(container) {
     }
   });
 
-  router.patch('/care-logs/:id/status', async (req, res, next) => {
+  router.patch('/care-logs/:id/status', requireCapability('careLog:approve'), async (req, res, next) => {
     try {
       const { status, reason } = req.body;
       const validStatuses = ['draft', 'submitted', 'in_review', 'pending', 'urgent', 'approved', 'rejected'];
@@ -695,10 +804,21 @@ function createDashboardRouter(container) {
       if (!name || !String(name).trim()) {
         return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: '이름은 필수입니다.' } });
       }
+      // §1 — 받지 않는 필드는 200이 아니라 400
+      const unknown = unknownRecipientFields(req.body);
+      if (unknown.length > 0) {
+        return res.status(400).json({
+          ok: false,
+          error: { code: 'BAD_REQUEST', message: `지원하지 않는 필드입니다: ${unknown.join(', ')}. 담당자 배정은 managerId를 사용하세요.` },
+        });
+      }
       const { recipientRepo, ownerId } = container.repos(req);
       const data = await recipientRepo.createRecipient(ownerId, req.body || {});
       return res.status(201).json({ ok: true, data });
     } catch (err) {
+      if (err && /찾을 수 없/.test(err.message || '')) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: err.message } });
+      }
       next(err);
     }
   });
@@ -716,18 +836,40 @@ function createDashboardRouter(container) {
     }
   });
 
-  router.patch('/recipients/:id', async (req, res, next) => {
-    try {
-      const { recipientRepo, ownerId } = container.repos(req);
-      const data = await recipientRepo.updateRecipient(ownerId, req.params.id, req.body || {});
-      if (!data) {
-        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '대상자를 찾을 수 없습니다' } });
+  // 배정 필드가 오면 manager:assign 능력을 요구한다 (일반 정보 수정은 통과)
+  const assignGuard = requireCapability('manager:assign');
+  router.patch(
+    '/recipients/:id',
+    (req, res, next) => {
+      const body = req.body || {};
+      const touchesAssignment = 'managerId' in body || 'managerName' in body || 'manager' in body;
+      if (touchesAssignment) return assignGuard(req, res, next);
+      return next();
+    },
+    async (req, res, next) => {
+      try {
+        // §1 — 받지 않는 필드는 200이 아니라 400
+        const unknown = unknownRecipientFields(req.body);
+        if (unknown.length > 0) {
+          return res.status(400).json({
+            ok: false,
+            error: { code: 'BAD_REQUEST', message: `지원하지 않는 필드입니다: ${unknown.join(', ')}. 담당자 배정은 managerId를 사용하세요.` },
+          });
+        }
+        const { recipientRepo, ownerId } = container.repos(req);
+        const data = await recipientRepo.updateRecipient(ownerId, req.params.id, req.body || {});
+        if (!data) {
+          return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '대상자를 찾을 수 없습니다' } });
+        }
+        return res.json({ ok: true, data });
+      } catch (err) {
+        if (err && /찾을 수 없/.test(err.message || '')) {
+          return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: err.message } });
+        }
+        next(err);
       }
-      return res.json({ ok: true, data });
-    } catch (err) {
-      next(err);
     }
-  });
+  );
 
   router.delete('/recipients/:id', async (req, res, next) => {
     try {
@@ -1097,6 +1239,89 @@ function createDashboardRouter(container) {
       }
       if (!result.success) {
         return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: result.error } });
+      }
+      return res.json({ ok: true, data: { success: true } });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ============================================================
+  // 계정별 권한 (PERMISSIONS.md — 마스터가 계정마다 능력을 열고 닫는다)
+  // 실제 권한 = rolePreset(role) + grants − revokes
+  // ============================================================
+
+  router.get('/accounts/:id/capabilities', requireCapability('account:grant'), async (req, res, next) => {
+    try {
+      const { userRepo } = container.repos(req);
+      const data = await userRepo.getCapabilities(req.params.id);
+      if (!data) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '계정을 찾을 수 없습니다' } });
+      }
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.put('/accounts/:id/capabilities', requireCapability('account:grant'), async (req, res, next) => {
+    try {
+      const { grants, revokes } = req.body || {};
+      const { userRepo, auditRepo, ownerId } = container.repos(req);
+      const data = await userRepo.setCapabilities(req.params.id, { grants, revokes });
+      if (!data) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '계정을 찾을 수 없습니다' } });
+      }
+
+      await auditRepo.log({
+        ownerId,
+        actorId: req.user.id,
+        action: 'account.grant',
+        targetType: 'user',
+        targetId: req.params.id,
+        payload: { grants: data.grants, revokes: data.revokes },
+        ip: req.ip,
+      });
+
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ============================================================
+  // 기관 관리 (BACKEND_REQUEST §8 — 가입 시 institutionCode 검증 대상)
+  // ============================================================
+
+  router.get('/institutions', requireAdmin, async (req, res, next) => {
+    try {
+      const { institutionRepo } = container.repos(req);
+      const data = await institutionRepo.list();
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post('/institutions', requireAdmin, async (req, res, next) => {
+    try {
+      const { institutionRepo } = container.repos(req);
+      const data = await institutionRepo.create(req.body || {});
+      return res.status(201).json({ ok: true, data });
+    } catch (err) {
+      if (err && /필수|4자리|사용 중/.test(err.message || '')) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: err.message } });
+      }
+      next(err);
+    }
+  });
+
+  router.delete('/institutions/:id', requireAdmin, async (req, res, next) => {
+    try {
+      const { institutionRepo } = container.repos(req);
+      const result = await institutionRepo.remove(req.params.id);
+      if (result.notFound) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '기관을 찾을 수 없습니다' } });
       }
       return res.json({ ok: true, data: { success: true } });
     } catch (err) {

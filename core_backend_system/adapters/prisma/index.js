@@ -19,6 +19,7 @@ const { PrismaConsentRepo } = require('./consentRepo');
 const { PrismaRiskRepo } = require('./riskRepo');
 const { PrismaAuditRepo } = require('./auditRepo');
 const { PrismaAnalysisRepo } = require('./analysisRepo');
+const { PrismaInstitutionRepo } = require('./institutionRepo');
 
 module.exports = {
   PrismaDashboardRepo,
@@ -36,4 +37,5 @@ module.exports = {
   PrismaRiskRepo,
   PrismaAuditRepo,
   PrismaAnalysisRepo,
+  PrismaInstitutionRepo,
 };
