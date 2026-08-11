@@ -67,7 +67,7 @@ class PrismaConsentRepo {
     await this._assertRecipient(ownerId, recipientId);
     const created = await this.prisma.consent.create({
       data: {
-        ownerId,
+        ownerId: grantedById, // 소유 계정은 처리자 본인 — 기관 공유 스코프로 함께 조회된다
         recipientId,
         voiceConsent: voiceConsent !== false,
         grantedById,

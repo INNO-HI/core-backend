@@ -99,8 +99,8 @@ class DashboardService {
     if (!normalizedEmail || !password) {
       return { success: false, error: '이메일과 비밀번호는 필수입니다.' };
     }
-    if (password.length < 6) {
-      return { success: false, error: '비밀번호는 6자 이상이어야 합니다.' };
+    if (password.length < 8) {
+      return { success: false, error: '비밀번호는 8자 이상이어야 합니다.' };
     }
 
     const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
@@ -144,6 +144,23 @@ class DashboardService {
       },
     });
 
+    // 실무자 가입이면 매니저 레코드를 만들어 계정과 연결한다 —
+    // 담당 배정·일정·서버 스코핑(§5)의 기준점이 된다
+    if (role === 'caregiver') {
+      await prisma.manager
+        .create({
+          data: {
+            name: created.name,
+            gender: data.gender === 'male' ? 'male' : 'female',
+            phone: created.phone,
+            email: created.email,
+            userId: created.id,
+            ownerId: created.id,
+          },
+        })
+        .catch((err) => console.error('[register] 매니저 자동 생성 실패:', err.message));
+    }
+
     return {
       success: true,
       data: { user: safeUser(created, institution), token: buildToken(created) },
@@ -179,8 +196,8 @@ class DashboardService {
    */
   async resetPassword(data) {
     const nextPassword = data.newPassword || data.password;
-    if (!nextPassword || nextPassword.length < 6) {
-      return { success: false, error: '비밀번호는 6자 이상이어야 합니다.' };
+    if (!nextPassword || nextPassword.length < 8) {
+      return { success: false, error: '비밀번호는 8자 이상이어야 합니다.' };
     }
     if (!data.token) {
       return {
@@ -215,9 +232,16 @@ class DashboardService {
     if (!normalizedEmail) {
       return { success: false, error: '이메일을 입력해 주세요.' };
     }
+    // 계정 존재 여부를 응답으로 알려주지 않는다 (열거 방지) —
+    // 이미 가입된 이메일이면 코드 대신 안내 메일만 보낸다
     const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
     if (existing) {
-      return { success: false, error: '이미 사용 중인 이메일입니다.' };
+      await mailer.sendMail({
+        to: normalizedEmail,
+        subject: '[안심하이] 가입 안내',
+        text: '이 이메일은 이미 안심하이에 가입되어 있습니다.\n비밀번호를 잊으셨다면 비밀번호 찾기를 이용해 주세요.\n본인이 요청하지 않았다면 이 메일을 무시하셔도 됩니다.',
+      });
+      return { success: true };
     }
 
     const code = String(crypto.randomInt(100000, 1000000)); // 6자리 무작위

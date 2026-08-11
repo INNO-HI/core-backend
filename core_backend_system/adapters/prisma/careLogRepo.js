@@ -7,8 +7,10 @@ class PrismaCareLogRepo {
     this.prisma = prisma;
   }
 
-  async getCareLogs(ownerId, filters, page = 1, pageSize = 10) {
+  async getCareLogs(ownerId, filters, page = 1, pageSize = 10, restrictManagerId) {
     const where = { ownerId };
+    // caregiver 서버 스코핑 (§5) — 담당분만. 화면에서 거르는 것으로 충분하지 않다
+    if (restrictManagerId) where.managerId = restrictManagerId;
 
     if (filters.status && filters.status !== 'all') where.status = filters.status;
 
@@ -31,7 +33,7 @@ class PrismaCareLogRepo {
     // 상태별 카운트 — 스펙 상태(submitted/in_review)와 현행 상태를 모두 집계
     const grouped = await this.prisma.careLog.groupBy({
       by: ['status'],
-      where: { ownerId },
+      where: restrictManagerId ? { ownerId, managerId: restrictManagerId } : { ownerId },
       _count: { _all: true },
     });
     const statusCounts = {
@@ -116,9 +118,9 @@ class PrismaCareLogRepo {
     };
   }
 
-  async getCareLogById(ownerId, id) {
+  async getCareLogById(ownerId, id, restrictManagerId) {
     const log = await this.prisma.careLog.findFirst({
-      where: { id, ownerId },
+      where: restrictManagerId ? { id, ownerId, managerId: restrictManagerId } : { id, ownerId },
       include: {
         recipient: { select: { id: true, name: true } },
         manager: { select: { name: true } },
@@ -250,7 +252,9 @@ class PrismaCareLogRepo {
       });
       await this.prisma.notification.create({
         data: {
-          ownerId,
+          // 소유 계정은 검토자 본인 (기관 공유 스코프로 실무자도 본다).
+          // reviewerId 가 없던 구 호출은 원 기록의 소유 계정으로 남긴다.
+          ownerId: reviewerId || log?.ownerId,
           kind: 'status',
           icon: 'warning',
           isUrgent: false,
@@ -293,7 +297,7 @@ class PrismaCareLogRepo {
     const created = await this.prisma.$transaction(async (tx) => {
       const careLog = await tx.careLog.create({
         data: {
-          ownerId,
+          ownerId: authorUserId, // 소유 계정은 작성자 본인 — 기관 공유 스코프로 관리자가 본다
           recipientId: recipient.id,
           managerId: recipient.manager.id,
           centerId: recipient.manager.centerId || null,
@@ -353,14 +357,22 @@ class PrismaCareLogRepo {
           });
         }
 
-        // 경보 이상만 큐에 올린다. dueAt 은 저장해 둔다 — 규칙이 바뀌어도 소급되지 않는다
-        if (SLA_HOURS[risk.grade]) {
+        // 경보 이상만 큐에 올린다. dueAt 은 저장해 둔다 — 규칙이 바뀌어도 소급되지 않는다.
+        // 단, 음성 수집 동의가 유효하지 않은 분은 큐에 올리지 않는다 —
+        // 동의 없는 분의 AI 판정을 기관 화면에 노출하지 않는 것이 원칙이다.
+        const activeConsent = SLA_HOURS[risk.grade]
+          ? await tx.consent.findFirst({
+              where: { recipientId: recipient.id, voiceConsent: true, revokedAt: null },
+              select: { id: true },
+            })
+          : null;
+        if (SLA_HOURS[risk.grade] && activeConsent) {
           const raisedAt = new Date();
           await tx.riskQueue.create({
             data: {
               assessmentId: assessment.id,
               recipientId: recipient.id,
-              ownerId,
+              ownerId: authorUserId,
               grade: risk.grade,
               raisedAt,
               dueAt: new Date(raisedAt.getTime() + SLA_HOURS[risk.grade] * 60 * 60 * 1000),
@@ -372,7 +384,7 @@ class PrismaCareLogRepo {
       // 방문 이력·대상자 집계 갱신 (기존 방문 기록 화면과의 정합)
       await tx.visit.create({
         data: {
-          ownerId,
+          ownerId: authorUserId,
           recipientId: recipient.id,
           managerId: recipient.manager.id,
           visitDate: visitedAt,

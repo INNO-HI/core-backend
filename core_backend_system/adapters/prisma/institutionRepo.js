@@ -54,6 +54,42 @@ class PrismaInstitutionRepo {
     await this.prisma.institution.delete({ where: { id } });
     return { success: true };
   }
+
+  // ── 센터 관리 (전역 참조 데이터 — 마스터 콘솔에서 등록·삭제) ──
+
+  async listCenters() {
+    const items = await this.prisma.center.findMany({
+      orderBy: { name: 'asc' },
+      include: { _count: { select: { managers: true } } },
+    });
+    return items.map((c) => ({ id: c.id, name: c.name, managerCount: c._count.managers }));
+  }
+
+  async createCenter({ name } = {}) {
+    const trimmed = String(name || '').trim();
+    if (!trimmed) throw new Error('센터 이름은 필수입니다.');
+    const existing = await this.prisma.center.findUnique({ where: { name: trimmed } });
+    if (existing) throw new Error('이미 등록된 센터 이름입니다.');
+    const created = await this.prisma.center.create({ data: { name: trimmed } });
+    return { id: created.id, name: created.name, managerCount: 0 };
+  }
+
+  async removeCenter(id) {
+    const existing = await this.prisma.center.findUnique({
+      where: { id },
+      include: { _count: { select: { managers: true } } },
+    });
+    if (!existing) return { success: false, notFound: true };
+    if (existing._count.managers > 0) {
+      // Center 삭제는 Restrict — 소속 매니저를 먼저 옮겨야 한다
+      return {
+        success: false,
+        error: `소속 매니저가 ${existing._count.managers}명 있어 삭제할 수 없습니다. 매니저의 센터를 먼저 변경해주세요.`,
+      };
+    }
+    await this.prisma.center.delete({ where: { id } });
+    return { success: true };
+  }
 }
 
 module.exports = { PrismaInstitutionRepo };

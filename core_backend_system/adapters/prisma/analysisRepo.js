@@ -87,10 +87,10 @@ class PrismaAnalysisRepo {
   }
 
   /** 위기 알림 큐 (화면 1) */
-  async listCrisisCases(ownerId) {
+  async listCrisisCases(ownerId, restrictManagerId) {
     const now = Date.now();
     const items = await this.prisma.riskQueue.findMany({
-      where: { ownerId },
+      where: restrictManagerId ? { ownerId, recipient: { managerId: restrictManagerId } } : { ownerId },
       orderBy: [{ acknowledgedAt: { sort: 'asc', nulls: 'first' } }, { dueAt: 'asc' }],
       include: this._queueInclude(),
       take: 200,
@@ -99,9 +99,11 @@ class PrismaAnalysisRepo {
   }
 
   /** 위기 케이스 상세 (화면 2) */
-  async getCrisisCaseDetail(ownerId, id) {
+  async getCrisisCaseDetail(ownerId, id, restrictManagerId) {
     const item = await this.prisma.riskQueue.findFirst({
-      where: { id, ownerId },
+      where: restrictManagerId
+        ? { id, ownerId, recipient: { managerId: restrictManagerId } }
+        : { id, ownerId },
       include: this._queueInclude(),
     });
     if (!item) return null;

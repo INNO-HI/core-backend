@@ -49,8 +49,9 @@ class PrismaMemoRepo {
     const memo = await this.prisma.memo.create({
       data: {
         recipientId,
-        authorId: authorId || ownerId,
-        ownerId,
+        authorId,
+        // 소유 계정은 작성자 본인 — 기관 구성원은 공유 스코프({in})로 함께 본다
+        ownerId: authorId,
         content,
         type: type || 'normal',
       },

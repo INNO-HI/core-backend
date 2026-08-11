@@ -21,8 +21,9 @@ class PrismaRecipientRepo {
     this.prisma = prisma;
   }
 
-  async getRecipients(ownerId, filters) {
+  async getRecipients(ownerId, filters, restrictManagerId) {
     const where = { ownerId };
+    if (restrictManagerId) where.managerId = restrictManagerId; // caregiver 담당분만
 
     if (filters.status && filters.status !== 'all') where.status = filters.status;
 
@@ -95,9 +96,9 @@ class PrismaRecipientRepo {
     return { total, normal, caution, urgent, unvisited };
   }
 
-  async getRecipientById(ownerId, id) {
+  async getRecipientById(ownerId, id, restrictManagerId) {
     const r = await this.prisma.recipient.findFirst({
-      where: { id, ownerId },
+      where: restrictManagerId ? { id, ownerId, managerId: restrictManagerId } : { id, ownerId },
       include: {
         dong: { select: { name: true } },
         manager: { select: { id: true, name: true, phone: true, center: { select: { name: true } } } },
@@ -265,8 +266,8 @@ class PrismaRecipientRepo {
     return byName.id;
   }
 
-  /** 대상자 생성 */
-  async createRecipient(ownerId, data = {}) {
+  /** 대상자 생성 — writerId: 소유로 기록될 계정(본인). 조회·검증은 ownerId(기관 스코프) */
+  async createRecipient(ownerId, data = {}, writerId) {
     if (!data.name || !String(data.name).trim()) {
       throw new Error('이름은 필수입니다.');
     }
@@ -277,7 +278,7 @@ class PrismaRecipientRepo {
 
     const created = await this.prisma.recipient.create({
       data: {
-        ownerId,
+        ownerId: writerId || (typeof ownerId === 'string' ? ownerId : undefined),
         name: String(data.name).trim(),
         age: Number(data.age) || 0,
         gender: data.gender === 'male' ? 'male' : 'female',

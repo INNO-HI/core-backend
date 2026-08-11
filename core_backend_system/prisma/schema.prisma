@@ -87,8 +87,12 @@ model Manager {
   email     String?
   status    String    @default("active") // active | leave | retired
   startDate DateTime?
-  centerId  String
-  center    Center    @relation(fields: [centerId], references: [id], onDelete: Restrict)
+  centerId  String?
+  center    Center?   @relation(fields: [centerId], references: [id], onDelete: Restrict)
+
+  // 실무자 계정 연결 — caregiver 로그인 계정과 매니저 레코드를 잇는다.
+  // 서버 스코핑(§5 "배정 범위를 서버에서 막아야 한다")의 기준점.
+  userId String? @unique
 
   ownerId String
   owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)

@@ -30,7 +30,7 @@ class PrismaVisitRepo {
     }));
   }
 
-  async createVisitForManager(ownerId, managerId, data) {
+  async createVisitForManager(ownerId, managerId, data, writerId) {
     const visitDate = new Date(data.visitDate);
     if (Number.isNaN(visitDate.getTime())) {
       throw new Error('visitDate is invalid');
@@ -56,7 +56,7 @@ class PrismaVisitRepo {
       data: {
         managerId,
         recipientId: data.recipientId,
-        ownerId,
+        ownerId: writerId || (typeof ownerId === 'string' ? ownerId : undefined),
         visitDate,
         visitType,
         summary: data.summary || '일정 등록',

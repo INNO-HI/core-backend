@@ -8,6 +8,7 @@
 
 const express = require('express');
 const { requireAuth, requireAdmin, requireCapability } = require('./authMiddleware');
+const { resolveScope } = require('./scopeMiddleware');
 
 // ── 앱 요청 모양 정규화 (BACKEND_REQUEST §11 — 서버가 양쪽 모양을 수용한다) ──
 
@@ -222,9 +223,18 @@ function createDashboardRouter(container) {
   });
 
   // ============================================================
-  // 이 아래는 모두 인증 필요 — req.user.id 를 ownerId 로 사용
+  // 이 아래는 모두 인증 필요.
+  // resolveScope 가 기관 공유 스코프(req.ownerScope)와 caregiver 담당
+  // 기준점(req.callerManagerId)을 주입한다 — 같은 기관은 하나의 워크스페이스.
   // ============================================================
   router.use(requireAuth);
+  router.use(resolveScope);
+
+  /** caregiver 는 담당분만 본다 (§5 서버 강제). 연결된 매니저가 없으면 아무것도 안 보인다 */
+  function restrictOf(repos) {
+    return repos.callerRole === 'caregiver' ? (repos.callerManagerId || '__none__') : undefined;
+  }
+
 
   // ============================================================
   // 대시보드 KPI
@@ -273,8 +283,8 @@ function createDashboardRouter(container) {
         });
       }
 
-      const { dashboardRepo, ownerId } = container.repos(req);
-      const data = await dashboardRepo.createNotification(ownerId, {
+      const { dashboardRepo, writerId } = container.repos(req);
+      const data = await dashboardRepo.createNotification(writerId, {
         kind,
         title: String(title).trim(),
         content: String(content).trim(),
@@ -305,8 +315,11 @@ function createDashboardRouter(container) {
   // 파라미터 없이 부르면 기존 대시보드 홈 위젯용 응답을 유지한다.
   router.get('/tasks', async (req, res, next) => {
     try {
-      const { date, assigneeId, recipientId, status } = req.query;
-      const { dashboardRepo, taskRepo, ownerId } = container.repos(req);
+      const { date, recipientId, status } = req.query;
+      const repos = container.repos(req);
+      const { dashboardRepo, taskRepo, ownerId } = repos;
+      const restrict = restrictOf(repos);
+      const assigneeId = restrict || req.query.assigneeId;
 
       if (date || assigneeId || recipientId) {
         const data = await taskRepo.listTasks(ownerId, { date, assigneeId, recipientId, status });
@@ -331,8 +344,8 @@ function createDashboardRouter(container) {
           error: { code: 'BAD_REQUEST', message: 'recipientId와 startAt은 필수입니다.' },
         });
       }
-      const { taskRepo, ownerId } = container.repos(req);
-      const data = await taskRepo.createTask(ownerId, req.body);
+      const { taskRepo, ownerId, writerId } = container.repos(req);
+      const data = await taskRepo.createTask(ownerId, req.body, writerId);
       return res.status(201).json({ ok: true, data });
     } catch (err) {
       if (err && /찾을 수 없|배정|지정되지/.test(err.message || '')) {
@@ -403,8 +416,8 @@ function createDashboardRouter(container) {
       const page = Number(req.query.page) || 1;
       const pageSize = Math.min(Number(req.query.pageSize) || 10, 100);
 
-      const { careLogRepo, ownerId } = container.repos(req);
-      const data = await careLogRepo.getCareLogs(ownerId, filters, page, pageSize);
+      const repos = container.repos(req);
+      const data = await repos.careLogRepo.getCareLogs(repos.ownerId, filters, page, pageSize, restrictOf(repos));
       return res.json({ ok: true, data });
     } catch (err) {
       next(err);
@@ -427,11 +440,11 @@ function createDashboardRouter(container) {
         });
       }
 
-      const { careLogRepo, auditRepo, ownerId } = container.repos(req);
-      const data = await careLogRepo.createFromApp(ownerId, payload, req.user.id);
+      const { careLogRepo, auditRepo, ownerId, writerId } = container.repos(req);
+      const data = await careLogRepo.createFromApp(ownerId, payload, writerId);
 
       await auditRepo.log({
-        ownerId,
+        ownerId: writerId,
         actorId: req.user.id,
         action: 'care_log.create',
         targetType: 'care_log',
@@ -451,8 +464,8 @@ function createDashboardRouter(container) {
 
   router.get('/care-logs/:id', async (req, res, next) => {
     try {
-      const { careLogRepo, ownerId } = container.repos(req);
-      const data = await careLogRepo.getCareLogById(ownerId, req.params.id);
+      const repos = container.repos(req);
+      const data = await repos.careLogRepo.getCareLogById(repos.ownerId, req.params.id, restrictOf(repos));
       if (!data) {
         return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '돌봄 일지를 찾을 수 없습니다' } });
       }
@@ -505,7 +518,7 @@ function createDashboardRouter(container) {
         });
       }
 
-      const { careLogRepo, auditRepo, ownerId } = container.repos(req);
+      const { careLogRepo, auditRepo, ownerId, writerId } = container.repos(req);
       const result = await careLogRepo.updateStatus(ownerId, req.params.id, status, reason, req.user.id);
 
       if (status === 'approved' || status === 'rejected') {
@@ -557,8 +570,8 @@ function createDashboardRouter(container) {
 
   router.get('/risk-queue', async (req, res, next) => {
     try {
-      const { riskRepo, ownerId } = container.repos(req);
-      const data = await riskRepo.getQueue(ownerId);
+      const repos = container.repos(req);
+      const data = await repos.riskRepo.getQueue(repos.ownerId, restrictOf(repos));
       return res.json({ ok: true, data });
     } catch (err) {
       next(err);
@@ -575,12 +588,22 @@ function createDashboardRouter(container) {
         });
       }
 
-      const { riskRepo, auditRepo, ownerId } = container.repos(req);
+      const { riskRepo, auditRepo, dashboardRepo, ownerId, writerId } = container.repos(req);
       const data = await riskRepo.acknowledge(ownerId, req.params.id, String(note).trim(), req.user.id);
+
+      // 확인 결과를 실무자 소식함으로 회신 — 반려만 내려가고 위기 처리는 조용하던 공백을 메운다
+      await dashboardRepo.createNotification(writerId, {
+        kind: 'status',
+        icon: 'success',
+        isUrgent: false,
+        title: `위기 확인 완료: ${data.recipientName || ''}`,
+        content: String(note).trim(),
+        link: data.careLogId ? `/care-logs/${data.careLogId}` : null,
+      }).catch(() => null);
 
       // 누가, 언제 확인했는지가 감사의 대상이다 (스펙 §1)
       await auditRepo.log({
-        ownerId,
+        ownerId: writerId,
         actorId: req.user.id,
         action: 'risk.ack',
         targetType: 'risk_queue',
@@ -608,8 +631,8 @@ function createDashboardRouter(container) {
 
   router.get('/analysis/crisis-cases', async (req, res, next) => {
     try {
-      const { analysisRepo, ownerId } = container.repos(req);
-      const data = await analysisRepo.listCrisisCases(ownerId);
+      const repos = container.repos(req);
+      const data = await repos.analysisRepo.listCrisisCases(repos.ownerId, restrictOf(repos));
       return res.json({ ok: true, data });
     } catch (err) {
       next(err);
@@ -618,8 +641,8 @@ function createDashboardRouter(container) {
 
   router.get('/analysis/crisis-cases/:id', async (req, res, next) => {
     try {
-      const { analysisRepo, ownerId } = container.repos(req);
-      const data = await analysisRepo.getCrisisCaseDetail(ownerId, req.params.id);
+      const repos = container.repos(req);
+      const data = await repos.analysisRepo.getCrisisCaseDetail(repos.ownerId, req.params.id, restrictOf(repos));
       if (!data) {
         return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '위기 케이스를 찾을 수 없습니다' } });
       }
@@ -666,8 +689,8 @@ function createDashboardRouter(container) {
       if (!name || !String(name).trim()) {
         return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: '이름은 필수입니다.' } });
       }
-      const { managerRepo, ownerId } = container.repos(req);
-      const data = await managerRepo.createManager(ownerId, req.body || {});
+      const { managerRepo, ownerId, writerId } = container.repos(req);
+      const data = await managerRepo.createManager(ownerId, req.body || {}, writerId);
       return res.status(201).json({ ok: true, data });
     } catch (err) {
       next(err);
@@ -754,13 +777,13 @@ function createDashboardRouter(container) {
         });
       }
 
-      const { visitRepo, ownerId } = container.repos(req);
+      const { visitRepo, ownerId, writerId } = container.repos(req);
       const data = await visitRepo.createVisitForManager(ownerId, req.params.id, {
         recipientId,
         visitDate,
         visitType,
         summary,
-      });
+      }, writerId);
       return res.json({ ok: true, data });
     } catch (err) {
       next(err);
@@ -780,8 +803,8 @@ function createDashboardRouter(container) {
         manager: req.query.manager || 'all',
       };
 
-      const { recipientRepo, ownerId } = container.repos(req);
-      const data = await recipientRepo.getRecipients(ownerId, filters);
+      const repos = container.repos(req);
+      const data = await repos.recipientRepo.getRecipients(repos.ownerId, filters, restrictOf(repos));
       return res.json({ ok: true, data });
     } catch (err) {
       next(err);
@@ -812,8 +835,8 @@ function createDashboardRouter(container) {
           error: { code: 'BAD_REQUEST', message: `지원하지 않는 필드입니다: ${unknown.join(', ')}. 담당자 배정은 managerId를 사용하세요.` },
         });
       }
-      const { recipientRepo, ownerId } = container.repos(req);
-      const data = await recipientRepo.createRecipient(ownerId, req.body || {});
+      const { recipientRepo, ownerId, writerId } = container.repos(req);
+      const data = await recipientRepo.createRecipient(ownerId, req.body || {}, writerId);
       return res.status(201).json({ ok: true, data });
     } catch (err) {
       if (err && /찾을 수 없/.test(err.message || '')) {
@@ -825,8 +848,8 @@ function createDashboardRouter(container) {
 
   router.get('/recipients/:id', async (req, res, next) => {
     try {
-      const { recipientRepo, ownerId } = container.repos(req);
-      const data = await recipientRepo.getRecipientById(ownerId, req.params.id);
+      const repos = container.repos(req);
+      const data = await repos.recipientRepo.getRecipientById(repos.ownerId, req.params.id, restrictOf(repos));
       if (!data) {
         return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '대상자를 찾을 수 없습니다' } });
       }
@@ -1001,11 +1024,11 @@ function createDashboardRouter(container) {
 
   router.post('/recipients/:id/consents', async (req, res, next) => {
     try {
-      const { consentRepo, auditRepo, ownerId } = container.repos(req);
+      const { consentRepo, auditRepo, ownerId, writerId } = container.repos(req);
       const data = await consentRepo.grantConsent(ownerId, req.params.id, req.body || {}, req.user.id);
 
       await auditRepo.log({
-        ownerId,
+        ownerId: writerId,
         actorId: req.user.id,
         action: 'consent.grant',
         targetType: 'consent',
@@ -1025,7 +1048,7 @@ function createDashboardRouter(container) {
 
   router.post('/recipients/:id/consents/:consentId/revoke', async (req, res, next) => {
     try {
-      const { consentRepo, auditRepo, ownerId } = container.repos(req);
+      const { consentRepo, auditRepo, ownerId, writerId } = container.repos(req);
       const data = await consentRepo.revokeConsent(
         ownerId,
         req.params.id,
@@ -1034,7 +1057,7 @@ function createDashboardRouter(container) {
       );
 
       await auditRepo.log({
-        ownerId,
+        ownerId: writerId,
         actorId: req.user.id,
         action: 'consent.revoke',
         targetType: 'consent',
@@ -1110,7 +1133,7 @@ function createDashboardRouter(container) {
 
   router.get('/settings', async (req, res, next) => {
     try {
-      const { settingsRepo, ownerId } = container.repos(req);
+      const { settingsRepo, writerId: ownerId } = container.repos(req);
       const data = await settingsRepo.getSettings(ownerId);
       return res.json({ ok: true, data });
     } catch (err) {
@@ -1120,7 +1143,7 @@ function createDashboardRouter(container) {
 
   router.patch('/settings/profile', async (req, res, next) => {
     try {
-      const { settingsRepo, ownerId } = container.repos(req);
+      const { settingsRepo, writerId: ownerId } = container.repos(req);
       const data = await settingsRepo.updateProfile(ownerId, req.body || {});
       return res.json({ ok: true, data });
     } catch (err) {
@@ -1138,7 +1161,7 @@ function createDashboardRouter(container) {
         });
       }
 
-      const { settingsRepo, ownerId } = container.repos(req);
+      const { settingsRepo, writerId: ownerId } = container.repos(req);
       const result = await settingsRepo.changePassword(ownerId, { currentPassword, newPassword });
       if (!result.success) {
         return res.status(400).json({ ok: false, error: { code: 'PASSWORD_CHANGE_FAILED', message: result.error } });
@@ -1267,14 +1290,14 @@ function createDashboardRouter(container) {
   router.put('/accounts/:id/capabilities', requireCapability('account:grant'), async (req, res, next) => {
     try {
       const { grants, revokes } = req.body || {};
-      const { userRepo, auditRepo, ownerId } = container.repos(req);
+      const { userRepo, auditRepo, writerId } = container.repos(req);
       const data = await userRepo.setCapabilities(req.params.id, { grants, revokes });
       if (!data) {
         return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '계정을 찾을 수 없습니다' } });
       }
 
       await auditRepo.log({
-        ownerId,
+        ownerId: writerId,
         actorId: req.user.id,
         action: 'account.grant',
         targetType: 'user',
@@ -1322,6 +1345,48 @@ function createDashboardRouter(container) {
       const result = await institutionRepo.remove(req.params.id);
       if (result.notFound) {
         return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '기관을 찾을 수 없습니다' } });
+      }
+      return res.json({ ok: true, data: { success: true } });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ============================================================
+  // 센터 관리 (전역 참조 데이터) — 마스터 콘솔
+  // ============================================================
+
+  router.get('/centers', requireAdmin, async (req, res, next) => {
+    try {
+      const { institutionRepo } = container.repos(req);
+      return res.json({ ok: true, data: await institutionRepo.listCenters() });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post('/centers', requireAdmin, async (req, res, next) => {
+    try {
+      const { institutionRepo } = container.repos(req);
+      const data = await institutionRepo.createCenter(req.body || {});
+      return res.status(201).json({ ok: true, data });
+    } catch (err) {
+      if (err && /필수|이미 등록/.test(err.message || '')) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: err.message } });
+      }
+      next(err);
+    }
+  });
+
+  router.delete('/centers/:id', requireAdmin, async (req, res, next) => {
+    try {
+      const { institutionRepo } = container.repos(req);
+      const result = await institutionRepo.removeCenter(req.params.id);
+      if (result.notFound) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '센터를 찾을 수 없습니다' } });
+      }
+      if (!result.success) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: result.error } });
       }
       return res.json({ ok: true, data: { success: true } });
     } catch (err) {

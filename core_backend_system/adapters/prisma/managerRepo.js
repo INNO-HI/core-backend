@@ -260,19 +260,17 @@ class PrismaManagerRepo {
   }
 
   /** 매니저 생성 */
-  async createManager(ownerId, data = {}) {
+  async createManager(ownerId, data = {}, writerId) {
     if (!data.name || !String(data.name).trim()) {
       throw new Error('이름은 필수입니다.');
     }
 
+    // 센터는 선택 — 기관 코드 도입 후 센터 없는 기관도 실무자를 등록한다
     const centerId = await this._resolveCenterId(data.center || data.centerName);
-    if (!centerId) {
-      throw new Error('등록된 센터가 없어 매니저를 생성할 수 없습니다.');
-    }
 
     const created = await this.prisma.manager.create({
       data: {
-        ownerId,
+        ownerId: writerId || (typeof ownerId === 'string' ? ownerId : undefined),
         name: String(data.name).trim(),
         gender: data.gender === 'male' ? 'male' : 'female',
         phone: data.phone || null,

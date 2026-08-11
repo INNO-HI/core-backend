@@ -58,8 +58,8 @@ class PrismaTaskRepo {
     return tasks.map((t) => this._serialize(t));
   }
 
-  /** 일정 배포 (대시보드 §4 — tasks 는 대시보드가 만든다) */
-  async createTask(ownerId, { recipientId, assigneeId, type, startAt, durationMin }) {
+  /** 일정 배포 (대시보드 §4 — tasks 는 대시보드가 만든다). writerId: 소유 계정(본인) */
+  async createTask(ownerId, { recipientId, assigneeId, type, startAt, durationMin }, writerId) {
     const recipient = await this.prisma.recipient.findFirst({
       where: { id: recipientId, ownerId },
       select: { id: true, managerId: true },
@@ -71,7 +71,7 @@ class PrismaTaskRepo {
 
     const created = await this.prisma.task.create({
       data: {
-        ownerId,
+        ownerId: writerId || (typeof ownerId === 'string' ? ownerId : undefined),
         recipientId,
         managerId,
         type: type === 'call' ? 'call' : 'visit',

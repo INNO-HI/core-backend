@@ -109,12 +109,19 @@ function createContainer(options = {}) {
 
   function repos(req) {
     const tenant = resolveTenantFromReq(req, config.defaultTenant);
-    // 인증 미들웨어가 통과한 라우트에서는 req.user.id 가 ownerId 로 사용된다.
-    const ownerId = req.user?.id || null;
+    // ownerId: 조회 스코프 — scopeMiddleware 가 기관 공유 필터({in:[…]})로 넓힌다.
+    // writerId: 쓰기(생성) 시 기록될 소유 계정 — 항상 본인.
+    const ownerId = req.ownerScope ?? req.user?.id ?? null;
+    const writerId = req.user?.id || null;
+    const callerRole = req.user?.role || null;
+    const callerManagerId = req.callerManagerId ?? null;
 
     return {
       tenant,
       ownerId,
+      writerId,
+      callerRole,
+      callerManagerId,
       sttRepo,
       visitCategoryRepo,
       welfarePolicyRepo,

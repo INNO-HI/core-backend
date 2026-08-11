@@ -44,9 +44,9 @@ class PrismaRiskRepo {
   }
 
   /** 위기 큐 전체 조회 (미확인 + 확인 완료 — 정렬은 클라이언트/호출부 몫) */
-  async getQueue(ownerId) {
+  async getQueue(ownerId, restrictManagerId) {
     const items = await this.prisma.riskQueue.findMany({
-      where: { ownerId },
+      where: restrictManagerId ? { ownerId, recipient: { managerId: restrictManagerId } } : { ownerId },
       orderBy: [{ acknowledgedAt: { sort: 'asc', nulls: 'first' } }, { dueAt: 'asc' }],
       include: {
         recipient: { select: { name: true } },
