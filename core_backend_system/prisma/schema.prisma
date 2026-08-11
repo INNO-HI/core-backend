@@ -34,6 +34,11 @@ model User {
   // 계정별 권한 조정 (PERMISSIONS.md — 실제 권한 = rolePreset + grants − revokes)
   capabilityGrants Json? // { "grants": string[], "revokes": string[] }
 
+  // 운영 관리 (마스터 콘솔)
+  isActive       Boolean   @default(true) // 정지된 계정은 로그인 불가
+  lastLoginAt    DateTime?
+  sessionVersion Int       @default(0) // 올리면 기존 토큰 전부 무효 (세션 강제 종료)
+
   feedbacks     Feedback[]
   memos         Memo[]
   managers      Manager[]
@@ -587,6 +592,15 @@ model PasswordResetToken {
 
   @@index([userId])
   @@map("password_reset_tokens")
+}
+
+// 전역 런타임 설정 (점검 모드 등) — 마스터 콘솔에서 토글
+model SystemConfig {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("system_config")
 }
 
 model Notice {

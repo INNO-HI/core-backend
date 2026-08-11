@@ -53,6 +53,7 @@ class PrismaManagerRepo {
         recipientCount: m.recipientCount,
         monthlyVisits: m.monthlyVisits,
         status: m.status,
+        linkedUser: Boolean(m.userId), // 앱 실무자 계정 연결 여부
       })),
       totalCount: managers.length,
       statusCounts,
@@ -300,6 +301,24 @@ class PrismaManagerRepo {
   }
 
   /** 매니저 수정 */
+  /** 담당 대상자 일괄 재배정 (퇴직 인수인계) */
+  async reassignRecipients(ownerId, fromManagerId, toManagerId) {
+    const [from, to] = await Promise.all([
+      this.prisma.manager.findFirst({ where: { id: fromManagerId, ownerId }, select: { id: true } }),
+      this.prisma.manager.findFirst({ where: { id: toManagerId, ownerId }, select: { id: true } }),
+    ]);
+    if (!from || !to) throw new Error('실무자를 찾을 수 없거나 권한이 없습니다.');
+    const result = await this.prisma.recipient.updateMany({
+      where: { managerId: fromManagerId },
+      data: { managerId: toManagerId },
+    });
+    await Promise.all([
+      this.prisma.manager.update({ where: { id: fromManagerId }, data: { recipientCount: 0 } }).catch(() => null),
+      this.prisma.manager.update({ where: { id: toManagerId }, data: { recipientCount: { increment: result.count } } }).catch(() => null),
+    ]);
+    return { success: true, moved: result.count };
+  }
+
   async updateManager(ownerId, id, data = {}) {
     const existing = await this.prisma.manager.findFirst({ where: { id, ownerId } });
     if (!existing) return null;

@@ -24,7 +24,7 @@ function requireAuth(req, res, next) {
   const token = header.slice('Bearer '.length).trim();
   try {
     const payload = verifyToken(token);
-    req.user = { id: payload.userId, email: payload.email, role: payload.role };
+    req.user = { id: payload.userId, email: payload.email, role: payload.role, sv: payload.sv };
     return next();
   } catch (err) {
     const isExpired = err && err.name === 'TokenExpiredError';
