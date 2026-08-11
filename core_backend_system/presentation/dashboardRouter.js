@@ -1244,7 +1244,7 @@ function createDashboardRouter(container) {
       }
       return res.json({ ok: true, data });
     } catch (err) {
-      if (err && /마지막 관리자/.test(err.message || '')) {
+      if (err && /마지막 관리자|이미 사용|올바른 이메일|찾을 수 없/.test(err.message || '')) {
         return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: err.message } });
       }
       next(err);

@@ -32,11 +32,16 @@ class PrismaUserRepo {
   async listUsers() {
     const users = await this.prisma.user.findMany({
       orderBy: [{ role: 'asc' }, { createdAt: 'asc' }],
-      include: { _count: { select: { recipients: true, managers: true } } },
+      include: {
+        _count: { select: { recipients: true, managers: true } },
+        institution: { select: { id: true, name: true } },
+      },
     });
-    return users.map((u) =>
-      this._serialize(u, { recipients: u._count.recipients, managers: u._count.managers })
-    );
+    return users.map((u) => ({
+      ...this._serialize(u, { recipients: u._count.recipients, managers: u._count.managers }),
+      institutionId: u.institution?.id || null,
+      institutionName: u.institution?.name || null,
+    }));
   }
 
   async createUser({ email, name, password, role, phone } = {}) {
@@ -61,13 +66,29 @@ class PrismaUserRepo {
     return this._serialize(created);
   }
 
-  async updateUser(id, { name, role, phone } = {}) {
+  async updateUser(id, { name, role, phone, institutionId, email } = {}) {
     const existing = await this.prisma.user.findUnique({ where: { id } });
     if (!existing) return null;
 
     const patch = {};
+    if (email !== undefined) {
+      const normalized = String(email).trim().toLowerCase();
+      if (!normalized || !normalized.includes('@')) throw new Error('올바른 이메일을 입력해 주세요.');
+      const dup = await this.prisma.user.findUnique({ where: { email: normalized } });
+      if (dup && dup.id !== id) throw new Error('이미 사용 중인 이메일입니다.');
+      patch.email = normalized;
+    }
     if (name !== undefined) patch.name = String(name).trim();
     if (phone !== undefined) patch.phone = phone || null;
+    if (institutionId !== undefined) {
+      if (institutionId) {
+        const inst = await this.prisma.institution.findUnique({ where: { id: institutionId } });
+        if (!inst) throw new Error('소속 기관을 찾을 수 없습니다.');
+        patch.institutionId = inst.id;
+      } else {
+        patch.institutionId = null;
+      }
+    }
     if (role !== undefined && VALID_ROLES.includes(role)) {
       // 마지막 관리자를 강등하지 못하게 보호
       if ((existing.role === 'admin' || existing.role === 'master') && role !== 'admin' && role !== 'master') {
@@ -80,6 +101,27 @@ class PrismaUserRepo {
     }
 
     const updated = await this.prisma.user.update({ where: { id }, data: patch });
+
+    // 실무자로 바뀌면 실무자(매니저) 레코드를 만들어 계정과 연결한다 —
+    // 담당 배정·서버 스코핑의 기준점. 이미 연결돼 있으면 건드리지 않는다.
+    if (patch.role === 'caregiver') {
+      const linked = await this.prisma.manager.findUnique({ where: { userId: id } });
+      if (!linked) {
+        await this.prisma.manager
+          .create({
+            data: {
+              name: updated.name,
+              gender: 'female',
+              phone: updated.phone,
+              email: updated.email,
+              userId: id,
+              ownerId: id,
+            },
+          })
+          .catch(() => null);
+      }
+    }
+
     return this._serialize(updated);
   }
 

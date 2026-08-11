@@ -61,6 +61,28 @@ class PrismaAuditRepo {
         this.prisma.user.count({ where: { role: { in: ['institution', 'user'] } } }),
         this.prisma.user.count({ where: { role: 'caregiver' } }),
       ]);
+    const recentAccounts = await this.prisma.user.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+      select: { id: true, email: true, name: true, role: true, createdAt: true },
+    });
+
+    const instRows = await this.prisma.institution.findMany({
+      select: { id: true, name: true, code: true, users: { select: { id: true } } },
+    });
+    const perInstitution = [];
+    for (const inst of instRows) {
+      const memberIds = inst.users.map((u) => u.id);
+      const [rcp, mgr] = await Promise.all([
+        this.prisma.recipient.count({ where: { ownerId: { in: memberIds } } }),
+        this.prisma.manager.count({ where: { ownerId: { in: memberIds } } }),
+      ]);
+      perInstitution.push({
+        id: inst.id, name: inst.name, code: inst.code,
+        userCount: memberIds.length, recipientCount: rcp, managerCount: mgr,
+      });
+    }
+
     return {
       institutions,
       centers,
@@ -69,6 +91,10 @@ class PrismaAuditRepo {
       recipients,
       careLogs,
       risk: { open: openRisk, overdue: overdueRisk },
+      recentAccounts: recentAccounts.map((u) => ({
+        id: u.id, email: u.email, name: u.name, role: u.role, createdAt: u.createdAt.toISOString(),
+      })),
+      perInstitution,
     };
   }
 

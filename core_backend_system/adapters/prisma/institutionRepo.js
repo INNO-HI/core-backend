@@ -45,6 +45,17 @@ class PrismaInstitutionRepo {
         address: address || null,
       },
     });
+
+    // 기관 = 센터 — 기관을 만들면 동명 센터를 자동으로 만들어 연결한다.
+    // (센터는 매니저 FK 때문에 내부적으로 유지하되, 화면 개념으로는 기관 하나만 쓴다)
+    await this.prisma.center
+      .upsert({
+        where: { name: created.name },
+        update: { institutionId: created.id },
+        create: { name: created.name, institutionId: created.id },
+      })
+      .catch(() => null);
+
     return this._serialize(created);
   }
 

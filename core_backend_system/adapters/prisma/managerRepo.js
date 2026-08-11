@@ -47,7 +47,7 @@ class PrismaManagerRepo {
         id: m.id,
         name: m.name,
         gender: m.gender,
-        centerName: m.center.name,
+        centerName: m.center?.name || '',
         phone: m.phone || '',
         assignedDongs: m.assignedDongs.map((md) => md.dong.name),
         recipientCount: m.recipientCount,
@@ -113,7 +113,7 @@ class PrismaManagerRepo {
       id: m.id,
       name: m.name,
       gender: m.gender,
-      centerName: m.center.name,
+      centerName: m.center?.name || '',
       phone: m.phone || '',
       email: m.email || '',
       assignedDongs: m.assignedDongs.map((md) => md.dong.name),
@@ -266,7 +266,19 @@ class PrismaManagerRepo {
     }
 
     // 센터는 선택 — 기관 코드 도입 후 센터 없는 기관도 실무자를 등록한다
-    const centerId = await this._resolveCenterId(data.center || data.centerName);
+    let centerId = await this._resolveCenterId(data.center || data.centerName);
+
+    // 기관 = 센터: 센터를 지정하지 않으면 소유 계정의 기관 센터를 자동 배정한다
+    if (!centerId && writerId) {
+      const ownerUser = await this.prisma.user.findUnique({
+        where: { id: writerId },
+        select: { institution: { select: { name: true } } },
+      });
+      if (ownerUser?.institution?.name) {
+        const c = await this.prisma.center.findUnique({ where: { name: ownerUser.institution.name } });
+        centerId = c?.id || null;
+      }
+    }
 
     const created = await this.prisma.manager.create({
       data: {
