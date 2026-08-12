@@ -814,11 +814,21 @@ function createDashboardRouter(container) {
 
   router.delete('/managers/:id', async (req, res, next) => {
     try {
-      const { managerRepo, ownerId } = container.repos(req);
+      const { managerRepo, auditRepo, ownerId, writerId } = container.repos(req);
       const result = await managerRepo.deleteManager(ownerId, req.params.id);
       if (result.notFound) {
         return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '매니저를 찾을 수 없습니다' } });
       }
+      // 삭제 사유 감사 — 권한·계정 변경 내역 3년 보관 대상 (?reason=)
+      await auditRepo.log({
+        ownerId: writerId,
+        actorId: req.user.id,
+        action: 'manager.delete',
+        targetType: 'manager',
+        targetId: req.params.id,
+        payload: req.query.reason ? { reason: String(req.query.reason) } : undefined,
+        ip: req.ip,
+      });
       return res.json({ ok: true, data: { success: true } });
     } catch (err) {
       next(err);
@@ -1012,11 +1022,20 @@ function createDashboardRouter(container) {
 
   router.delete('/recipients/:id', async (req, res, next) => {
     try {
-      const { recipientRepo, ownerId } = container.repos(req);
+      const { recipientRepo, auditRepo, ownerId, writerId } = container.repos(req);
       const result = await recipientRepo.deleteRecipient(ownerId, req.params.id);
       if (result.notFound) {
         return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '대상자를 찾을 수 없습니다' } });
       }
+      await auditRepo.log({
+        ownerId: writerId,
+        actorId: req.user.id,
+        action: 'recipient.delete',
+        targetType: 'recipient',
+        targetId: req.params.id,
+        payload: req.query.reason ? { reason: String(req.query.reason) } : undefined,
+        ip: req.ip,
+      });
       return res.json({ ok: true, data: { success: true } });
     } catch (err) {
       next(err);
@@ -1445,8 +1464,8 @@ function createDashboardRouter(container) {
 
   router.post('/accounts/:id/reset-password', requireAdmin, async (req, res, next) => {
     try {
-      const { newPassword } = req.body || {};
-      const { userRepo } = container.repos(req);
+      const { newPassword, reason } = req.body || {};
+      const { userRepo, auditRepo, writerId } = container.repos(req);
       const result = await userRepo.resetPassword(req.params.id, newPassword);
       if (result.notFound) {
         return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '계정을 찾을 수 없습니다' } });
@@ -1454,6 +1473,15 @@ function createDashboardRouter(container) {
       if (!result.success) {
         return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: result.error } });
       }
+      await auditRepo.log({
+        ownerId: writerId,
+        actorId: req.user.id,
+        action: 'account.reset_password',
+        targetType: 'user',
+        targetId: req.params.id,
+        payload: reason ? { reason: String(reason) } : undefined,
+        ip: req.ip,
+      });
       return res.json({ ok: true, data: { success: true } });
     } catch (err) {
       next(err);
@@ -1462,7 +1490,7 @@ function createDashboardRouter(container) {
 
   router.delete('/accounts/:id', requireAdmin, async (req, res, next) => {
     try {
-      const { userRepo } = container.repos(req);
+      const { userRepo, auditRepo, writerId } = container.repos(req);
       const result = await userRepo.deleteUser(req.user.id, req.params.id);
       if (result.notFound) {
         return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '계정을 찾을 수 없습니다' } });
@@ -1470,6 +1498,15 @@ function createDashboardRouter(container) {
       if (!result.success) {
         return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: result.error } });
       }
+      await auditRepo.log({
+        ownerId: writerId,
+        actorId: req.user.id,
+        action: 'account.delete',
+        targetType: 'user',
+        targetId: req.params.id,
+        payload: req.query.reason ? { reason: String(req.query.reason) } : undefined,
+        ip: req.ip,
+      });
       return res.json({ ok: true, data: { success: true } });
     } catch (err) {
       next(err);
@@ -1589,11 +1626,20 @@ function createDashboardRouter(container) {
 
   router.delete('/institutions/:id', requireAdmin, async (req, res, next) => {
     try {
-      const { institutionRepo } = container.repos(req);
+      const { institutionRepo, auditRepo, writerId } = container.repos(req);
       const result = await institutionRepo.remove(req.params.id);
       if (result.notFound) {
         return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '기관을 찾을 수 없습니다' } });
       }
+      await auditRepo.log({
+        ownerId: writerId,
+        actorId: req.user.id,
+        action: 'institution.delete',
+        targetType: 'institution',
+        targetId: req.params.id,
+        payload: req.query.reason ? { reason: String(req.query.reason) } : undefined,
+        ip: req.ip,
+      });
       return res.json({ ok: true, data: { success: true } });
     } catch (err) {
       next(err);
