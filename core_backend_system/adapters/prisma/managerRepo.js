@@ -2,9 +2,40 @@
  * PostgreSQL Manager Repository (Prisma) — ownerId 격리
  */
 
+/**
+ * 아직 결재가 끝나지 않은 일지 상태들.
+ *
+ * 앱은 일지를 `submitted` 로 올리는데(careLogRepo.createCareLog 기본값) 실무자 화면은
+ * approved/pending/rejected 세 칸만 그린다. pending 만 세면 앱이 올린 일지가
+ * "0건"으로 사라져, 같은 화면의 최근 보고서 목록과 숫자가 어긋난다.
+ */
+const PENDING_CARELOG_STATUSES = ['draft', 'submitted', 'in_review', 'pending', 'urgent'];
+
+/** 이번 달 [시작, 다음 달 시작) 범위 — 월 방문 집계 기준 */
+function currentMonthRange() {
+  const start = new Date();
+  start.setDate(1);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setMonth(end.getMonth() + 1);
+  return { start, end };
+}
+
 class PrismaManagerRepo {
   constructor({ prisma }) {
     this.prisma = prisma;
+  }
+
+  /** 매니저 id 배열 → 이번 달 방문 수 Map */
+  async _monthlyVisitCounts(managerIds) {
+    if (!managerIds.length) return new Map();
+    const { start, end } = currentMonthRange();
+    const groups = await this.prisma.visit.groupBy({
+      by: ['managerId'],
+      where: { managerId: { in: managerIds }, visitDate: { gte: start, lt: end } },
+      _count: { _all: true },
+    });
+    return new Map(groups.map((g) => [g.managerId, g._count._all]));
   }
 
   async getManagers(ownerId, filters) {
@@ -38,9 +69,15 @@ class PrismaManagerRepo {
       include: {
         center: { select: { name: true } },
         assignedDongs: { include: { dong: { select: { name: true } } } },
+        // 담당 대상자 수는 실제 배정 관계를 센다.
+        // manager.recipientCount 컬럼은 배정 시 갱신되지 않아 항상 0으로 남았다.
+        _count: { select: { recipients: true } },
       },
       orderBy: { name: 'asc' },
     });
+
+    // 이번 달 방문 수도 같은 이유로 실집계 — 매니저별 한 번의 groupBy 로 끝낸다
+    const monthlyVisitMap = await this._monthlyVisitCounts(managers.map((m) => m.id));
 
     return {
       managers: managers.map((m) => ({
@@ -50,8 +87,8 @@ class PrismaManagerRepo {
         centerName: m.center?.name || '',
         phone: m.phone || '',
         assignedDongs: m.assignedDongs.map((md) => md.dong.name),
-        recipientCount: m.recipientCount,
-        monthlyVisits: m.monthlyVisits,
+        recipientCount: m._count.recipients,
+        monthlyVisits: monthlyVisitMap.get(m.id) || 0,
         status: m.status,
         linkedUser: Boolean(m.userId), // 앱 실무자 계정 연결 여부
       })),
@@ -95,20 +132,32 @@ class PrismaManagerRepo {
 
     if (!m) return null;
 
-    const monthStart = new Date();
-    monthStart.setDate(1);
-    monthStart.setHours(0, 0, 0, 0);
+    const { start: monthStart, end: monthEnd } = currentMonthRange();
 
-    const [approvedReports, pendingReports, rejectedReports, totalVisits, monthlyReportsCount] = await Promise.all([
+    const [
+      approvedReports,
+      pendingReports,
+      rejectedReports,
+      totalVisits,
+      monthlyReportsCount,
+      recipientCount,
+      monthlyVisits,
+    ] = await Promise.all([
       this.prisma.careLog.count({ where: { ownerId, managerId: id, status: 'approved' } }),
-      this.prisma.careLog.count({ where: { ownerId, managerId: id, status: 'pending' } }),
+      this.prisma.careLog.count({ where: { ownerId, managerId: id, status: { in: PENDING_CARELOG_STATUSES } } }),
       this.prisma.careLog.count({ where: { ownerId, managerId: id, status: 'rejected' } }),
       this.prisma.visit.count({ where: { ownerId, managerId: id } }),
       this.prisma.careLog.count({ where: { ownerId, managerId: id, createdAt: { gte: monthStart } } }),
+      // 저장 컬럼(recipientCount/monthlyVisits)은 배정 때 갱신되지 않는다.
+      // 아래 assignedRecipients 목록과 같은 기준(배정 관계)으로 세야 KPI 와 목록이 어긋나지 않는다.
+      this.prisma.recipient.count({ where: { managerId: id } }),
+      this.prisma.visit.count({ where: { managerId: id, visitDate: { gte: monthStart, lt: monthEnd } } }),
     ]);
 
-    const totalReports = approvedReports + pendingReports + rejectedReports;
-    const approvalRate = totalReports > 0 ? Math.round((approvedReports / totalReports) * 100) : 0;
+    // 승인율은 "결재가 끝난 것 중 승인 비율"이다. 미결까지 분모에 넣으면
+    // 검토가 밀렸을 뿐인데 실무자 승인율이 떨어진다 (프론트 care-logs.ts 도 같은 규칙).
+    const decidedReports = approvedReports + rejectedReports;
+    const approvalRate = decidedReports > 0 ? Math.round((approvedReports / decidedReports) * 100) : 0;
 
     return {
       id: m.id,
@@ -118,15 +167,15 @@ class PrismaManagerRepo {
       phone: m.phone || '',
       email: m.email || '',
       assignedDongs: m.assignedDongs.map((md) => md.dong.name),
-      recipientCount: m.recipientCount,
-      monthlyVisits: m.monthlyVisits,
+      recipientCount,
+      monthlyVisits,
       status: m.status,
       startDate: m.startDate ? m.startDate.toISOString().split('T')[0] : null,
       stats: {
-        monthlyVisits: m.monthlyVisits,
+        monthlyVisits,
         monthlyReports: monthlyReportsCount,
         approvalRate,
-        totalRecipients: m.recipientCount,
+        totalRecipients: recipientCount,
       },
       recentReports: m.careLogs.map((cl) => ({
         id: cl.id,
@@ -162,13 +211,16 @@ class PrismaManagerRepo {
   async getManagerReports(ownerId, managerId, filters = {}) {
     const where = { ownerId, managerId };
 
-    if (filters.status && filters.status !== 'all') where.status = filters.status;
+    // '대기' 탭은 결재 전 상태를 모두 포함한다 — 카운트와 목록이 같은 기준이어야 한다
+    if (filters.status && filters.status !== 'all') {
+      where.status = filters.status === 'pending' ? { in: PENDING_CARELOG_STATUSES } : filters.status;
+    }
     if (filters.dateStart) where.visitDate = { ...(where.visitDate || {}), gte: new Date(filters.dateStart) };
     if (filters.dateEnd) where.visitDate = { ...(where.visitDate || {}), lte: new Date(filters.dateEnd) };
 
     const [allCount, pendingCount, approvedCount, rejectedCount] = await Promise.all([
       this.prisma.careLog.count({ where: { ownerId, managerId } }),
-      this.prisma.careLog.count({ where: { ownerId, managerId, status: 'pending' } }),
+      this.prisma.careLog.count({ where: { ownerId, managerId, status: { in: PENDING_CARELOG_STATUSES } } }),
       this.prisma.careLog.count({ where: { ownerId, managerId, status: 'approved' } }),
       this.prisma.careLog.count({ where: { ownerId, managerId, status: 'rejected' } }),
     ]);
