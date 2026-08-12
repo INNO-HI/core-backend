@@ -46,6 +46,31 @@ class PrismaUserRepo {
     }));
   }
 
+  /**
+   * caregiver 계정에 실무자(매니저) 레코드를 붙인다. 이미 있으면 그대로 둔다.
+   *
+   * 이 레코드가 없으면 담당 배정도, 앱의 담당분 스코핑(scopeMiddleware.callerManagerId)도
+   * 불가능하다. 콘솔은 "실무자 레코드가 자동 연결됩니다"라고 안내하므로 계정 생성 시점부터
+   * 연결돼 있어야 한다 — 예전에는 역할을 한 번 더 저장해야 생겼다.
+   */
+  async _ensureManagerLink(user) {
+    if (!user || user.role !== 'caregiver') return;
+    const linked = await this.prisma.manager.findUnique({ where: { userId: user.id } });
+    if (linked) return;
+    await this.prisma.manager
+      .create({
+        data: {
+          name: user.name,
+          gender: 'female',
+          phone: user.phone,
+          email: user.email,
+          userId: user.id,
+          ownerId: user.id,
+        },
+      })
+      .catch(() => null);
+  }
+
   async createUser({ email, name, password, role, phone } = {}) {
     const normalized = String(email || '').trim().toLowerCase();
     if (!normalized) throw new Error('이메일은 필수입니다.');
@@ -65,6 +90,7 @@ class PrismaUserRepo {
         emailVerified: true,
       },
     });
+    await this._ensureManagerLink(created);
     return this._serialize(created);
   }
 
@@ -105,24 +131,9 @@ class PrismaUserRepo {
 
     const updated = await this.prisma.user.update({ where: { id }, data: patch });
 
-    // 실무자로 바뀌면 실무자(매니저) 레코드를 만들어 계정과 연결한다 —
-    // 담당 배정·서버 스코핑의 기준점. 이미 연결돼 있으면 건드리지 않는다.
+    // 실무자로 바뀌면 실무자(매니저) 레코드를 만들어 계정과 연결한다
     if (patch.role === 'caregiver') {
-      const linked = await this.prisma.manager.findUnique({ where: { userId: id } });
-      if (!linked) {
-        await this.prisma.manager
-          .create({
-            data: {
-              name: updated.name,
-              gender: 'female',
-              phone: updated.phone,
-              email: updated.email,
-              userId: id,
-              ownerId: id,
-            },
-          })
-          .catch(() => null);
-      }
+      await this._ensureManagerLink(updated);
     }
 
     return this._serialize(updated);

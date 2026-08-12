@@ -39,12 +39,16 @@ class PrismaRecipientRepo {
     if (filters.dong && filters.dong !== 'all') where.dong = { name: filters.dong };
     if (filters.manager && filters.manager !== 'all') where.manager = { name: filters.manager };
 
+    // 상태 카운트도 목록과 같은 범위를 세야 한다.
+    // caregiver 는 담당분만 받는데 카운트가 기관 전체였어서, 앱 목록은 1명인데 배지는 2로 떴다.
+    const scope = restrictManagerId ? { ownerId, managerId: restrictManagerId } : { ownerId };
+
     const [allCount, normalCount, cautionCount, urgentCount, unvisitedCount] = await Promise.all([
-      this.prisma.recipient.count({ where: { ownerId } }),
-      this.prisma.recipient.count({ where: { ownerId, status: 'normal' } }),
-      this.prisma.recipient.count({ where: { ownerId, status: 'caution' } }),
-      this.prisma.recipient.count({ where: { ownerId, status: 'urgent' } }),
-      this.prisma.recipient.count({ where: { ownerId, status: 'unvisited' } }),
+      this.prisma.recipient.count({ where: scope }),
+      this.prisma.recipient.count({ where: { ...scope, status: 'normal' } }),
+      this.prisma.recipient.count({ where: { ...scope, status: 'caution' } }),
+      this.prisma.recipient.count({ where: { ...scope, status: 'urgent' } }),
+      this.prisma.recipient.count({ where: { ...scope, status: 'unvisited' } }),
     ]);
 
     const statusCounts = {
@@ -94,13 +98,15 @@ class PrismaRecipientRepo {
     };
   }
 
-  async getKPIs(ownerId) {
+  /** 실무자(caregiver) 가 부르면 담당분만 센다 — 앱 홈 숫자와 목록이 같아야 한다 */
+  async getKPIs(ownerId, restrictManagerId) {
+    const scope = restrictManagerId ? { ownerId, managerId: restrictManagerId } : { ownerId };
     const [total, normal, caution, urgent, unvisited] = await Promise.all([
-      this.prisma.recipient.count({ where: { ownerId } }),
-      this.prisma.recipient.count({ where: { ownerId, status: 'normal' } }),
-      this.prisma.recipient.count({ where: { ownerId, status: 'caution' } }),
-      this.prisma.recipient.count({ where: { ownerId, status: 'urgent' } }),
-      this.prisma.recipient.count({ where: { ownerId, status: 'unvisited' } }),
+      this.prisma.recipient.count({ where: scope }),
+      this.prisma.recipient.count({ where: { ...scope, status: 'normal' } }),
+      this.prisma.recipient.count({ where: { ...scope, status: 'caution' } }),
+      this.prisma.recipient.count({ where: { ...scope, status: 'urgent' } }),
+      this.prisma.recipient.count({ where: { ...scope, status: 'unvisited' } }),
     ]);
     return { total, normal, caution, urgent, unvisited };
   }

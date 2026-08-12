@@ -9,6 +9,8 @@
 const express = require('express');
 const { requireAuth, requireAdmin, requireCapability } = require('./authMiddleware');
 const { resolveScope } = require('./scopeMiddleware');
+const { verifyToken } = require('../lib/auth');
+const { prisma } = require('../lib/prisma');
 
 // ── 앱 요청 모양 정규화 (BACKEND_REQUEST §11 — 서버가 양쪽 모양을 수용한다) ──
 
@@ -160,7 +162,30 @@ function createDashboardRouter(container) {
     }
   });
 
-  router.post('/auth/logout', async (_req, res) => {
+  /**
+   * 로그아웃 — 세션을 실제로 끊는다.
+   *
+   * sessionVersion 을 올리면 이전에 발급된 토큰은 scopeMiddleware 에서
+   * SESSION_TERMINATED 로 거절된다. 예전에는 {ok:true} 만 돌려줘서, 폰을 잃어버려도
+   * 그 토큰이 만료일까지 살아 있었다.
+   *
+   * JWT 라 토큰 하나만 골라 끊을 수 없어 그 계정의 모든 기기가 함께 로그아웃된다.
+   * 토큰이 없거나 이미 만료됐어도 200 이다 — 클라이언트는 어차피 로컬 토큰을 지우고,
+   * 여기서 401 을 주면 앱이 로그아웃을 끝내지 못한다.
+   */
+  router.post('/auth/logout', async (req, res) => {
+    const header = req.headers['authorization'] || '';
+    if (header.startsWith('Bearer ')) {
+      try {
+        const payload = verifyToken(header.slice('Bearer '.length).trim());
+        await prisma.user.update({
+          where: { id: payload.userId },
+          data: { sessionVersion: { increment: 1 } },
+        });
+      } catch (err) {
+        // 만료·위조 토큰이면 끊을 세션이 없다. 그대로 성공으로 끝낸다.
+      }
+    }
     return res.json({ ok: true });
   });
 
@@ -877,8 +902,9 @@ function createDashboardRouter(container) {
 
   router.get('/recipients/kpi', async (req, res, next) => {
     try {
-      const { recipientRepo, ownerId } = container.repos(req);
-      const data = await recipientRepo.getKPIs(ownerId);
+      const repos = container.repos(req);
+      const { recipientRepo, ownerId } = repos;
+      const data = await recipientRepo.getKPIs(ownerId, restrictOf(repos));
       return res.json({ ok: true, data });
     } catch (err) {
       next(err);
