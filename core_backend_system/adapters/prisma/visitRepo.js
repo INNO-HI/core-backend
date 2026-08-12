@@ -2,6 +2,8 @@
  * PostgreSQL Visit Repository (Prisma) — ownerId 격리
  */
 
+const { rangeStart, rangeEndExclusive } = require('../../lib/dateRange');
+
 class PrismaVisitRepo {
   constructor({ prisma }) {
     this.prisma = prisma;
@@ -10,8 +12,8 @@ class PrismaVisitRepo {
   async getVisitsByRecipientId(ownerId, recipientId, filters = {}) {
     const where = { ownerId, recipientId };
 
-    if (filters.dateStart) where.visitDate = { ...(where.visitDate || {}), gte: new Date(filters.dateStart) };
-    if (filters.dateEnd) where.visitDate = { ...(where.visitDate || {}), lte: new Date(filters.dateEnd) };
+    if (filters.dateStart) where.visitDate = { ...(where.visitDate || {}), gte: rangeStart(filters.dateStart) };
+    if (filters.dateEnd) where.visitDate = { ...(where.visitDate || {}), lt: rangeEndExclusive(filters.dateEnd) };
 
     const visits = await this.prisma.visit.findMany({
       where,

@@ -2,6 +2,8 @@
  * PostgreSQL Manager Repository (Prisma) — ownerId 격리
  */
 
+const { rangeStart, rangeEndExclusive } = require('../../lib/dateRange');
+
 /**
  * 아직 결재가 끝나지 않은 일지 상태들.
  *
@@ -215,8 +217,8 @@ class PrismaManagerRepo {
     if (filters.status && filters.status !== 'all') {
       where.status = filters.status === 'pending' ? { in: PENDING_CARELOG_STATUSES } : filters.status;
     }
-    if (filters.dateStart) where.visitDate = { ...(where.visitDate || {}), gte: new Date(filters.dateStart) };
-    if (filters.dateEnd) where.visitDate = { ...(where.visitDate || {}), lte: new Date(filters.dateEnd) };
+    if (filters.dateStart) where.visitDate = { ...(where.visitDate || {}), gte: rangeStart(filters.dateStart) };
+    if (filters.dateEnd) where.visitDate = { ...(where.visitDate || {}), lt: rangeEndExclusive(filters.dateEnd) };
 
     const [allCount, pendingCount, approvedCount, rejectedCount] = await Promise.all([
       this.prisma.careLog.count({ where: { ownerId, managerId } }),
@@ -257,8 +259,8 @@ class PrismaManagerRepo {
       where.recipient = { name: { contains: filters.search, mode: 'insensitive' } };
     }
 
-    if (filters.dateStart) where.visitDate = { ...(where.visitDate || {}), gte: new Date(filters.dateStart) };
-    if (filters.dateEnd) where.visitDate = { ...(where.visitDate || {}), lte: new Date(filters.dateEnd) };
+    if (filters.dateStart) where.visitDate = { ...(where.visitDate || {}), gte: rangeStart(filters.dateStart) };
+    if (filters.dateEnd) where.visitDate = { ...(where.visitDate || {}), lt: rangeEndExclusive(filters.dateEnd) };
 
     const allVisits = await this.prisma.visit.findMany({ where: { ownerId, managerId } });
     const regularCount = allVisits.filter((v) => v.visitType === 'visit').length;

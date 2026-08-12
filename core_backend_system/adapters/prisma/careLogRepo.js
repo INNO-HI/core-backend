@@ -2,6 +2,8 @@
  * PostgreSQL Care Log Repository (Prisma) — ownerId 격리
  */
 
+const { rangeStart, rangeEndExclusive } = require('../../lib/dateRange');
+
 class PrismaCareLogRepo {
   constructor({ prisma }) {
     this.prisma = prisma;
@@ -23,8 +25,8 @@ class PrismaCareLogRepo {
       ];
     }
 
-    if (filters.dateStart) where.visitDate = { ...(where.visitDate || {}), gte: new Date(filters.dateStart) };
-    if (filters.dateEnd) where.visitDate = { ...(where.visitDate || {}), lte: new Date(filters.dateEnd) };
+    if (filters.dateStart) where.visitDate = { ...(where.visitDate || {}), gte: rangeStart(filters.dateStart) };
+    if (filters.dateEnd) where.visitDate = { ...(where.visitDate || {}), lt: rangeEndExclusive(filters.dateEnd) };
 
     if (filters.dong && filters.dong !== 'all') {
       where.recipient = { ...(where.recipient || {}), dong: { name: filters.dong } };
@@ -84,8 +86,8 @@ class PrismaCareLogRepo {
     const where = { ownerId, recipientId };
 
     if (filters.status && filters.status !== 'all') where.status = filters.status;
-    if (filters.dateStart) where.visitDate = { ...(where.visitDate || {}), gte: new Date(filters.dateStart) };
-    if (filters.dateEnd) where.visitDate = { ...(where.visitDate || {}), lte: new Date(filters.dateEnd) };
+    if (filters.dateStart) where.visitDate = { ...(where.visitDate || {}), gte: rangeStart(filters.dateStart) };
+    if (filters.dateEnd) where.visitDate = { ...(where.visitDate || {}), lt: rangeEndExclusive(filters.dateEnd) };
 
     const totalCount = await this.prisma.careLog.count({ where });
     const logs = await this.prisma.careLog.findMany({
