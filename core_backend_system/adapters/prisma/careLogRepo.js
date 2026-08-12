@@ -301,10 +301,12 @@ class PrismaCareLogRepo {
           recipientId: recipient.id,
           managerId: recipient.manager.id,
           centerId: recipient.manager.centerId || null,
-          status: 'submitted',
+          status: payload.status || 'submitted',
           visitDate: visitedAt,
           visitType: payload.type === 'call' ? 'call' : 'visit',
-          mode: payload.mode === 'liveRecording' ? 'liveRecording' : 'postVoiceMemo',
+          notes: payload.notes ? String(payload.notes) : null,
+          // 웹 수기 작성은 mode 없이 온다 — 앱 기록에만 남긴다
+          mode: payload.mode ? (payload.mode === 'liveRecording' ? 'liveRecording' : 'postVoiceMemo') : null,
           transcript: payload.transcript || null, // 마스킹된 텍스트만 — 원본 오디오는 받지 않는다
           summary: payload.summary || null,
           sessionNo,

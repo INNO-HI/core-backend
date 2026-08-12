@@ -2,7 +2,18 @@
 
 > **Base URL**: `http://localhost:4100`  
 > **Content-Type**: `application/json` (파일 업로드 제외)  
-> **인증**: 현재 토큰 인증 임시 비활성화 상태. 원래는 `Authorization: Bearer <JWT>` 헤더 필요.
+> **인증**: 모든 `/core/dashboard/*` 데이터 라우트는 `Authorization: Bearer <JWT>` 필수 (auth 라우트만 공개).
+>
+> ⚠️ **이 문서는 일부 구식이다.** 최신 계약은 코드가 기준이다
+> (`core_backend_system/presentation/dashboardRouter.js`). 특히:
+> - 토큰 인증은 **활성화**되어 있다 (비활성화 아님).
+> - 이메일 인증코드는 무작위 6자리 + 메일 발송 (고정 `123456` 아님).
+> - 비밀번호 재설정은 메일로 받은 토큰 필수 (`{ token, newPassword }`).
+> - 로그인/가입 응답 `user` 에 `managerId`(연결된 매니저)와 `capabilities` 포함.
+> - `POST /care-logs` 는 앱 평면 모양(`visitedAt`/한국어 등급)과
+>   웹 모양(`visitDate`/`careContent`/`isUrgent`) 둘 다 받는다.
+> - 이 문서에 없는 최신 라우트: `/risk-queue`, `/analysis/*`, `/consents`,
+>   `/statistics/*`, `/settings`, `/system/*`, `/accounts`, `/institutions`, `/centers`, `/audit-logs`.
 
 ---
 

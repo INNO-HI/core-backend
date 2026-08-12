@@ -10,9 +10,12 @@
 
 const { hashPassword, comparePassword } = require('../../lib/auth');
 
+// User.role 실제 어휘 그대로 반환한다 — /auth/login 응답과 같은 어휘.
 const ROLE_LABELS = {
+  master: '시스템 관리자',
   admin: '구/군 관리자',
-  manager: '매니저',
+  institution: '기관 관리자',
+  caregiver: '실무자',
   user: '관리자',
 };
 
@@ -28,7 +31,7 @@ class PrismaSettingsRepo {
       name,
       email: user?.email || '',
       phone: user?.phone || '',
-      role: user?.role === 'manager' ? 'manager' : 'district_admin',
+      role: user?.role || 'user',
       roleLabel: ROLE_LABELS[user?.role] || '관리자',
       createdAt: user?.createdAt instanceof Date ? user.createdAt.toISOString() : user?.createdAt || '',
       avatarInitials: name.slice(0, 2),
@@ -44,14 +47,43 @@ class PrismaSettingsRepo {
   }
 
   async getSettings(ownerId) {
-    const [user, dongs, centerCount, managerCount] = await Promise.all([
+    const [user, managerCount, recipientDongs, managerDongs, ownCenters] = await Promise.all([
       this.prisma.user.findUnique({ where: { id: ownerId } }),
-      this.prisma.dong.findMany({ orderBy: { name: 'asc' }, select: { name: true } }),
-      this.prisma.center.count(),
       this.prisma.manager.count({ where: { ownerId } }),
+      // 관할 구역은 계정 소유 데이터에서 유도한다 (전역 참조 테이블 아님):
+      // 담당 대상자의 동 ∪ 매니저 배정 동
+      this.prisma.recipient.findMany({
+        where: { ownerId, dongId: { not: null } },
+        select: { dong: { select: { name: true } } },
+        distinct: ['dongId'],
+      }),
+      this.prisma.managerDong.findMany({
+        where: { manager: { ownerId } },
+        select: { dong: { select: { name: true } } },
+      }),
+      this.prisma.manager.findMany({
+        where: { ownerId, centerId: { not: null } },
+        select: { centerId: true },
+        distinct: ['centerId'],
+      }),
     ]);
 
-    const dongList = dongs.map((d) => d.name);
+    let dongList = [
+      ...new Set(
+        [...recipientDongs, ...managerDongs].map((r) => r.dong?.name).filter(Boolean)
+      ),
+    ].sort();
+    let centerCount = ownCenters.length;
+
+    // 아직 데이터가 없는 신규 계정은 전역 참조 목록을 안내용으로 보여준다
+    if (dongList.length === 0 && centerCount === 0) {
+      const [dongs, allCenters] = await Promise.all([
+        this.prisma.dong.findMany({ orderBy: { name: 'asc' }, select: { name: true } }),
+        this.prisma.center.count(),
+      ]);
+      dongList = dongs.map((d) => d.name);
+      centerCount = allCenters;
+    }
 
     return {
       profile: this._profileFromUser(user),
@@ -71,11 +103,14 @@ class PrismaSettingsRepo {
     if (typeof data.name === 'string' && data.name.trim()) patch.name = data.name.trim();
     if (typeof data.phone === 'string') patch.phone = data.phone.trim() || null;
 
-    // 이메일 변경은 unique 제약 — 중복 시 예외 없이 무시
+    // 이메일 변경은 unique 제약 — 중복이면 명시적으로 거부한다 (조용히 무시하지 않는다)
     if (typeof data.email === 'string' && data.email.trim()) {
       const normalized = data.email.trim().toLowerCase();
       const existing = await this.prisma.user.findUnique({ where: { email: normalized } });
-      if (!existing || existing.id === ownerId) patch.email = normalized;
+      if (existing && existing.id !== ownerId) {
+        throw new Error('이미 사용 중인 이메일입니다.');
+      }
+      patch.email = normalized;
     }
 
     const user = Object.keys(patch).length

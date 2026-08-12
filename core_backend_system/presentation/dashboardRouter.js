@@ -36,6 +36,21 @@ function normalizeGrade(value) {
 function normalizeCareLogPayload(body) {
   const p = { ...(body || {}) };
 
+  // 대시보드(웹) 모양 수용 — visitDate/visitType 로 보내온다 (specs/006 계약)
+  if (!p.visitedAt && p.visitDate) p.visitedAt = p.visitDate;
+  if (!p.type && p.visitType) p.type = p.visitType;
+  delete p.visitDate;
+  delete p.visitType;
+
+  // 작성 주체 판별: 앱은 mode/transcript/sections/risk 를 실어 보낸다.
+  // 앱 기록은 submitted, 웹 수기 작성은 pending(긴급 체크 시 urgent)로 들어간다.
+  const isAppShape = Boolean(
+    p.mode || p.transcript || (Array.isArray(p.sections) && p.sections.length) ||
+    p.risk || p.grade || p.signals || p.evidence
+  );
+  p.status = p.isUrgent === true ? 'urgent' : isAppShape ? 'submitted' : 'pending';
+  delete p.isUrgent;
+
   if (Array.isArray(p.sections)) {
     p.sections = p.sections.map((s, i) => ({
       kind: s.kind,
@@ -203,25 +218,27 @@ function createDashboardRouter(container) {
     }
   });
 
-  router.delete('/auth/account', requireAuth, async (req, res, next) => {
+  async function handleDeleteAccount(req, res, next) {
     try {
-      const { reason } = req.body || {};
-      await container.dashboardService.deleteAccount({ userId: req.user.id, reason });
+      const { reason, password } = req.body || {};
+      const result = await container.dashboardService.deleteAccount({
+        userId: req.user.id,
+        password,
+        reason,
+      });
+      if (!result.success) {
+        return res
+          .status(401)
+          .json({ ok: false, error: { code: result.code || 'AUTH_FAILED', message: result.error } });
+      }
       return res.json({ ok: true });
     } catch (err) {
       next(err);
     }
-  });
+  }
 
-  router.post('/auth/delete-account', requireAuth, async (req, res, next) => {
-    try {
-      const { reason } = req.body || {};
-      await container.dashboardService.deleteAccount({ userId: req.user.id, reason });
-      return res.json({ ok: true });
-    } catch (err) {
-      next(err);
-    }
-  });
+  router.delete('/auth/account', requireAuth, handleDeleteAccount);
+  router.post('/auth/delete-account', requireAuth, handleDeleteAccount);
 
   // ============================================================
   // 이 아래는 모두 인증 필요.
@@ -437,7 +454,7 @@ function createDashboardRouter(container) {
       if (!recipientId || !visitedAt) {
         return res.status(400).json({
           ok: false,
-          error: { code: 'BAD_REQUEST', message: 'recipientId와 visitedAt은 필수입니다.' },
+          error: { code: 'BAD_REQUEST', message: 'recipientId와 visitedAt(visitDate)은 필수입니다.' },
         });
       }
 
@@ -1162,6 +1179,9 @@ function createDashboardRouter(container) {
       const data = await settingsRepo.updateProfile(ownerId, req.body || {});
       return res.json({ ok: true, data });
     } catch (err) {
+      if (err && /이미 사용 중인 이메일/.test(err.message || '')) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: err.message } });
+      }
       next(err);
     }
   });
@@ -1185,6 +1205,83 @@ function createDashboardRouter(container) {
     } catch (err) {
       next(err);
     }
+  });
+
+  // ============================================================
+  // 시스템 (DB 관리 패널) — 관리자 전용
+  // 비밀번호는 호출한 관리자 본인 계정의 비밀번호로 재확인한다.
+  // ============================================================
+
+  router.post('/system/postgres-access/verify', requireAdmin, async (req, res, next) => {
+    try {
+      const { password } = req.body || {};
+      const { systemRepo } = container.repos(req);
+      const ok = await systemRepo.verifyUserPassword(req.user.id, password);
+      if (!ok) {
+        return res
+          .status(401)
+          .json({ ok: false, error: { code: 'AUTH_FAILED', message: '비밀번호가 올바르지 않습니다.' } });
+      }
+      return res.json({ ok: true, data: { verified: true } });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.get('/system/postgres-status', requireAdmin, async (req, res, next) => {
+    try {
+      const password = req.headers['x-admin-system-password'];
+      const { systemRepo } = container.repos(req);
+      const ok = await systemRepo.verifyUserPassword(req.user.id, password);
+      if (!ok) {
+        return res
+          .status(401)
+          .json({ ok: false, error: { code: 'AUTH_FAILED', message: '비밀번호 확인이 필요합니다.' } });
+      }
+
+      if (process.env.USE_INMEMORY === 'true') {
+        return res.json({
+          ok: true,
+          data: {
+            provider: 'postgresql',
+            mode: 'inmemory',
+            status: 'inmemory',
+            database: null,
+            version: null,
+            latencyMs: 0,
+            sizeBytes: null,
+            sizePretty: null,
+            tableCount: 0,
+            activeConnections: 0,
+            idleConnections: 0,
+            maxConnections: null,
+            checkedAt: new Date().toISOString(),
+            message: 'In-Memory 모드로 동작 중입니다 (PostgreSQL 미사용).',
+          },
+        });
+      }
+
+      const data = await systemRepo.getPostgresStatus();
+      return res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Prisma Studio 는 별도 프로세스로 띄운다 (scripts/start-prisma-studio.sh).
+  // 주소를 PRISMA_STUDIO_URL 로 알려주면 그 주소를 내려준다.
+  router.post('/system/prisma-studio/session', requireAdmin, async (_req, res) => {
+    const launchUrl = process.env.PRISMA_STUDIO_URL;
+    if (!launchUrl) {
+      return res.status(404).json({
+        ok: false,
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Prisma Studio가 설정되어 있지 않습니다. 서버에 PRISMA_STUDIO_URL을 설정해 주세요.',
+        },
+      });
+    }
+    return res.json({ ok: true, data: { launchUrl, expiresInSec: 3600 } });
   });
 
   // ============================================================

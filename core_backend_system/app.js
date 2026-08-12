@@ -24,7 +24,7 @@ function createCoreApp(options = {}) {
       origin: allowedOrigins,
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant', 'x-admin-system-password'],
     })
   );
 

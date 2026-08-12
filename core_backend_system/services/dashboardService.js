@@ -31,7 +31,7 @@ function buildToken(user) {
   return signToken({ userId: user.id, email: user.email, role: user.role });
 }
 
-function safeUser(user, institution = null) {
+function safeUser(user, institution = null, managerId = null) {
   const { password: _omit, capabilityGrants: _grants, ...rest } = user;
   return {
     ...rest,
@@ -39,8 +39,16 @@ function safeUser(user, institution = null) {
     updatedAt: rest.updatedAt instanceof Date ? rest.updatedAt.toISOString() : rest.updatedAt,
     institutionId: user.institutionId || null,
     institutionName: institution?.name || user.institution?.name || null,
+    // 앱이 일정(/managers/:id/visits)을 부를 때 쓰는 기준점 — caregiver 연결 매니저
+    managerId: managerId || null,
     capabilities: resolveCapabilities(user),
   };
+}
+
+/** 로그인 계정에 연결된 Manager.id (caregiver 가입 시 자동 생성된 레코드) */
+async function linkedManagerId(userId) {
+  const m = await prisma.manager.findUnique({ where: { userId }, select: { id: true } });
+  return m?.id || null;
 }
 
 function sha256(value) {
@@ -79,7 +87,10 @@ class DashboardService {
     delete loginAttempts[normalizedEmail];
     return {
       success: true,
-      data: { user: safeUser(user), token: buildToken(user) },
+      data: {
+        user: safeUser(user, null, await linkedManagerId(user.id)),
+        token: buildToken(user),
+      },
     };
   }
 
@@ -108,9 +119,9 @@ class DashboardService {
       return { success: false, error: '이미 사용 중인 이메일입니다.' };
     }
 
-    // §6 — 보낸 역할을 그대로 저장한다. 미지정이면 legacy 'user'
+    // §6 — 보낸 역할을 그대로 저장한다. 미지정('none' 포함)이면 legacy 'user'
     let role = 'user';
-    if (data.role !== undefined && data.role !== null && data.role !== '') {
+    if (data.role !== undefined && data.role !== null && data.role !== '' && data.role !== 'none') {
       if (!REGISTERABLE_ROLES.includes(data.role)) {
         return {
           success: false,
@@ -146,8 +157,9 @@ class DashboardService {
 
     // 실무자 가입이면 매니저 레코드를 만들어 계정과 연결한다 —
     // 담당 배정·일정·서버 스코핑(§5)의 기준점이 된다
+    let managerId = null;
     if (role === 'caregiver') {
-      await prisma.manager
+      const manager = await prisma.manager
         .create({
           data: {
             name: created.name,
@@ -158,12 +170,16 @@ class DashboardService {
             ownerId: created.id,
           },
         })
-        .catch((err) => console.error('[register] 매니저 자동 생성 실패:', err.message));
+        .catch((err) => {
+          console.error('[register] 매니저 자동 생성 실패:', err.message);
+          return null;
+        });
+      managerId = manager?.id || null;
     }
 
     return {
       success: true,
-      data: { user: safeUser(created, institution), token: buildToken(created) },
+      data: { user: safeUser(created, institution, managerId), token: buildToken(created) },
     };
   }
 
@@ -300,8 +316,22 @@ class DashboardService {
     return { success: true, data: { requestId: 'req-' + Date.now() } };
   }
 
-  async deleteAccount({ userId }) {
+  /**
+   * 계정 삭제. 앱/웹은 본인 확인용 비밀번호를 함께 보낸다 —
+   * 비밀번호가 오면 반드시 검증하고, 틀리면 지우지 않는다.
+   */
+  async deleteAccount({ userId, password }) {
     if (!userId) return { success: true };
+
+    if (password !== undefined && password !== null && password !== '') {
+      const user = await prisma.user.findUnique({ where: { id: userId } });
+      if (!user) return { success: true }; // 이미 없는 계정 — 멱등 처리
+      const ok = await comparePassword(password, user.password);
+      if (!ok) {
+        return { success: false, code: 'AUTH_FAILED', error: '비밀번호가 올바르지 않습니다.' };
+      }
+    }
+
     await prisma.user.delete({ where: { id: userId } }).catch(() => null);
     return { success: true };
   }

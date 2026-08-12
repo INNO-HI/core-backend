@@ -9,6 +9,8 @@
  * 멱등성: 고정 id + upsert. 반복 실행해도 중복되지 않는다.
  */
 
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 

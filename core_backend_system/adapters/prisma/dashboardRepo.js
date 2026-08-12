@@ -194,13 +194,14 @@ class PrismaDashboardRepo {
       orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
       take: limit,
       include: {
-        recipient: { select: { name: true } },
+        recipient: { select: { id: true, name: true } },
         manager: { select: { name: true } },
       },
     });
 
     return logs.map((log) => ({
       id: log.id,
+      recipientId: log.recipient.id, // 앱이 이 항목에서 돌봄 시작 시 필요
       title: `${log.recipient.name} 대상자 돌봄 보고`,
       meta: `${log.manager.name} 매니저 · ${log.visitDate.toISOString().split('T')[0]}`,
       badge: log.status === 'urgent' ? '긴급' : '처리 중',

@@ -73,6 +73,7 @@ class PrismaRecipientRepo {
         gender: r.gender,
         dong: r.dong?.name || '',
         address: r.address || '',
+        phone: r.phone || '', // 앱 일정 화면의 전화 걸기 버튼이 목록 응답에서 쓴다
         // §5 — 목록·상세 같은 이름: manager 객체({id, name})로 통일. managerName 은 호환 유지
         manager: r.manager ? { id: r.manager.id, name: r.manager.name } : null,
         managerName: r.manager?.name || '',
