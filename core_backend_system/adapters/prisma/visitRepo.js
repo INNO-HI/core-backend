@@ -69,6 +69,26 @@ class PrismaVisitRepo {
       },
     });
 
+    // 앞으로의 방문(오늘 이후)은 일정(Task)으로도 남긴다 —
+    // 앱의 일정 등록이 대시보드 일정 화면(/tasks)에도 보이게 하는 다리.
+    // 지난 날짜는 기록이지 일정이 아니므로 만들지 않는다.
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    if (visitDate >= startOfToday) {
+      await this.prisma.task
+        .create({
+          data: {
+            type: visitType,
+            startAt: visitDate,
+            status: 'scheduled',
+            recipientId: data.recipientId,
+            managerId,
+            ownerId: created.ownerId,
+          },
+        })
+        .catch((err) => console.error('[visit→task] 일정 생성 실패:', err.message));
+    }
+
     return {
       id: created.id,
       recipientId: created.recipientId,

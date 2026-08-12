@@ -189,6 +189,19 @@ class PrismaDashboardRepo {
   }
 
   async getTasks(ownerId, limit = 10) {
+    // 오늘 이후의 방문 일정(Task) — 앱에서 등록한 일정이 여기로 온다
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const scheduled = await this.prisma.task.findMany({
+      where: { ownerId, status: 'scheduled', startAt: { gte: startOfToday } },
+      orderBy: { startAt: 'asc' },
+      take: limit,
+      include: {
+        recipient: { select: { id: true, name: true } },
+        manager: { select: { name: true } },
+      },
+    });
+
     const logs = await this.prisma.careLog.findMany({
       where: { ownerId, status: { in: ['urgent', 'pending'] } },
       orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
@@ -199,7 +212,17 @@ class PrismaDashboardRepo {
       },
     });
 
-    return logs.map((log) => ({
+    const scheduleItems = scheduled.map((t) => ({
+      id: t.id,
+      recipientId: t.recipient.id,
+      title: `${t.recipient.name} 님 ${t.type === 'call' ? '안부 전화' : '방문'} 일정`,
+      meta: `${t.manager.name} 매니저 · ${t.startAt.toISOString().split('T')[0]}`,
+      badge: '예정',
+      badgeColor: '#2563EB',
+      badgeBg: '#DBEAFE',
+    }));
+
+    const logItems = logs.map((log) => ({
       id: log.id,
       recipientId: log.recipient.id, // 앱이 이 항목에서 돌봄 시작 시 필요
       title: `${log.recipient.name} 대상자 돌봄 보고`,
@@ -208,6 +231,9 @@ class PrismaDashboardRepo {
       badgeColor: log.status === 'urgent' ? '#EF4444' : '#D97706',
       badgeBg: log.status === 'urgent' ? '#FEE2E2' : '#FEF3C7',
     }));
+
+    // 긴급 보고가 먼저, 그다음 임박한 일정 순으로 섞는다
+    return [...logItems.filter((l) => l.badge === '긴급'), ...scheduleItems, ...logItems.filter((l) => l.badge !== '긴급')].slice(0, limit);
   }
 
   /**
