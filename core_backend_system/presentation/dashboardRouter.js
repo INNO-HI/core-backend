@@ -234,6 +234,32 @@ function createDashboardRouter(container) {
     }
   });
 
+  // 가입 후 기관 합류 — 무소속 사일로 방지. 소속 없을 때만 허용
+  router.post('/auth/join-institution', requireAuth, async (req, res, next) => {
+    try {
+      const result = await container.dashboardService.joinInstitution(
+        req.user.id,
+        (req.body || {}).institutionCode
+      );
+      if (!result.success) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: result.error } });
+      }
+      const { auditRepo, writerId } = container.repos(req);
+      await auditRepo.log({
+        ownerId: writerId,
+        actorId: req.user.id,
+        action: 'account.join_institution',
+        targetType: 'user',
+        targetId: req.user.id,
+        payload: { institutionId: result.data.user.institutionId },
+        ip: req.ip,
+      });
+      return res.json({ ok: true, data: result.data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   router.post('/auth/organization-verify', async (req, res, next) => {
     try {
       const result = await container.dashboardService.requestOrganizationVerification(req.body);

@@ -324,6 +324,50 @@ class DashboardService {
     return { success: true };
   }
 
+  /**
+   * 가입 후 기관 합류 — 무소속 계정이 1인 사일로가 되는 것을 막는 경로.
+   * 소속이 없을 때만 허용한다. 기관 변경은 관리자(마스터) 작업.
+   */
+  async joinInstitution(userId, institutionCode) {
+    const code = String(institutionCode || '').trim();
+    if (!code) {
+      return { success: false, error: '기관 코드를 입력해 주세요.' };
+    }
+
+    const institution = await prisma.institution.findUnique({ where: { code } });
+    if (!institution) {
+      return { success: false, error: '기관 코드가 올바르지 않습니다. 소속 기관에 확인해 주세요.' };
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { institution: { select: { name: true } } },
+    });
+    if (!user) return { success: false, error: '계정을 찾을 수 없습니다.' };
+
+    if (user.institutionId === institution.id) {
+      return {
+        success: true,
+        data: { user: safeUser(user, institution, await linkedManagerId(user.id)) },
+      };
+    }
+    if (user.institutionId) {
+      return {
+        success: false,
+        error: `이미 ${user.institution?.name || '다른 기관'}에 소속되어 있습니다. 기관 변경은 관리자에게 요청해 주세요.`,
+      };
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: { institutionId: institution.id },
+    });
+    return {
+      success: true,
+      data: { user: safeUser(updated, institution, await linkedManagerId(userId)) },
+    };
+  }
+
   async requestOrganizationVerification(_data) {
     return { success: true, data: { requestId: 'req-' + Date.now() } };
   }
