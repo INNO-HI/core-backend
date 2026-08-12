@@ -28,6 +28,9 @@ function createCoreApp(options = {}) {
     })
   );
 
+  // nginx 뒤에서 실제 클라이언트 IP를 보게 한다 (rate-limit 정확도)
+  app.set('trust proxy', 1);
+
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true }));
 

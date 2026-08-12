@@ -64,6 +64,13 @@ class PrismaRecipientRepo {
       orderBy: { name: 'asc' },
     });
 
+    // 유효한 음성 동의가 있는 대상자 집합 (한 번의 질의로)
+    const consented = await this.prisma.consent.findMany({
+      where: { recipientId: { in: recipients.map((r) => r.id) }, voiceConsent: true, revokedAt: null },
+      select: { recipientId: true },
+    });
+    const consentedSet = new Set(consented.map((c) => c.recipientId));
+
     return {
       recipients: recipients.map((r) => ({
         id: r.id,
@@ -80,6 +87,7 @@ class PrismaRecipientRepo {
         lastVisitDate: r.lastVisitDate ? r.lastVisitDate.toISOString() : null,
         visitCount: r.visitCount,
         status: r.status,
+        voiceConsent: consentedSet.has(r.id),
       })),
       totalCount: recipients.length,
       statusCounts,

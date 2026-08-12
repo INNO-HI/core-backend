@@ -113,7 +113,7 @@ const RECIPIENT_FIELDS = new Set([
   'name', 'age', 'gender', 'status', 'dong', 'managerId', 'managerName', 'manager',
   'phone', 'address', 'careStartDate', 'healthInfo', 'emergencyContact',
   'birthDate', 'livingAlone', 'guardianName', 'guardianPhone', 'addressDetail',
-  'ownerUserId', // 마스터 콘솔 전용 — 생성될 대상자의 소유 계정 지정
+  'ownerUserId', 'institutionId', // 마스터 콘솔 전용 — 소속 기관 또는 소속 계정 지정
 ]);
 
 function unknownRecipientFields(body) {
@@ -240,6 +240,21 @@ function createDashboardRouter(container) {
   router.delete('/auth/account', requireAuth, handleDeleteAccount);
   router.post('/auth/delete-account', requireAuth, handleDeleteAccount);
 
+  // 점검 모드 등 공개 런타임 설정 (로그인 화면 배너용 — 인증 전에 읽는다)
+  router.get('/system-config', async (req, res, next) => {
+    try {
+      const { prisma } = require('../lib/prisma');
+      const rows = await prisma.systemConfig.findMany();
+      const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+      return res.json({
+        ok: true,
+        data: { maintenance: map.maintenance === 'true', maintenanceMessage: map.maintenanceMessage || '' },
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   // ============================================================
   // 이 아래는 모두 인증 필요.
   // resolveScope 가 기관 공유 스코프(req.ownerScope)와 caregiver 담당
@@ -301,8 +316,17 @@ function createDashboardRouter(container) {
         });
       }
 
-      const { dashboardRepo, writerId } = container.repos(req);
-      const data = await dashboardRepo.createNotification(writerId, {
+      const { dashboardRepo, writerId, callerRole } = container.repos(req);
+      let targetOwner = writerId;
+      if (req.body?.institutionId && (callerRole === 'master' || callerRole === 'admin')) {
+        const { prisma } = require('../lib/prisma');
+        const member = await prisma.user.findFirst({
+          where: { institutionId: String(req.body.institutionId) },
+          select: { id: true },
+        });
+        if (member) targetOwner = member.id; // 기관 공유 스코프로 구성원 전원이 본다
+      }
+      const data = await dashboardRepo.createNotification(targetOwner, {
         kind,
         title: String(title).trim(),
         content: String(content).trim(),
@@ -709,12 +733,27 @@ function createDashboardRouter(container) {
       }
       const { managerRepo, ownerId, writerId, callerRole } = container.repos(req);
       const body = { ...(req.body || {}) };
-      // 마스터는 소유 계정을 지정해 만든다 — 해당 기관 워크스페이스에 보이게
+      // 마스터는 소속 기관(institutionId) 또는 소속 계정(ownerUserId)을 지정해 만든다
       let effectiveWriter = writerId;
-      if (body.ownerUserId && (callerRole === 'master' || callerRole === 'admin')) {
-        effectiveWriter = String(body.ownerUserId);
+      if (callerRole === 'master' || callerRole === 'admin') {
+        if (body.institutionId) {
+          const { prisma } = require('../lib/prisma');
+          const inst = String(body.institutionId);
+          const owner = await prisma.user.findFirst({
+            where: { institutionId: inst },
+            orderBy: [{ role: 'asc' }, { createdAt: 'asc' }],
+            select: { id: true },
+          });
+          if (!owner) {
+            return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: '해당 기관에 소속 계정이 없습니다. 먼저 계정을 만들어 주세요.' } });
+          }
+          effectiveWriter = owner.id;
+        } else if (body.ownerUserId) {
+          effectiveWriter = String(body.ownerUserId);
+        }
       }
       delete body.ownerUserId;
+      delete body.institutionId;
       const data = await managerRepo.createManager(ownerId, body, effectiveWriter);
       return res.status(201).json({ ok: true, data });
     } catch (err) {
@@ -862,12 +901,27 @@ function createDashboardRouter(container) {
       }
       const { recipientRepo, ownerId, writerId, callerRole } = container.repos(req);
       const body = { ...(req.body || {}) };
-      // 마스터는 소유 계정을 지정해 만든다 — 지정한 기관 워크스페이스에 보이게
+      // 마스터는 소속 기관(institutionId) 또는 소속 계정(ownerUserId)을 지정해 만든다
       let effectiveWriter = writerId;
-      if (body.ownerUserId && (callerRole === 'master' || callerRole === 'admin')) {
-        effectiveWriter = String(body.ownerUserId);
+      if (callerRole === 'master' || callerRole === 'admin') {
+        if (body.institutionId) {
+          const { prisma } = require('../lib/prisma');
+          const inst = String(body.institutionId);
+          const owner = await prisma.user.findFirst({
+            where: { institutionId: inst },
+            orderBy: [{ role: 'asc' }, { createdAt: 'asc' }],
+            select: { id: true },
+          });
+          if (!owner) {
+            return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: '해당 기관에 소속 계정이 없습니다. 먼저 계정을 만들어 주세요.' } });
+          }
+          effectiveWriter = owner.id;
+        } else if (body.ownerUserId) {
+          effectiveWriter = String(body.ownerUserId);
+        }
       }
       delete body.ownerUserId;
+      delete body.institutionId;
       const data = await recipientRepo.createRecipient(ownerId, body, effectiveWriter);
       return res.status(201).json({ ok: true, data });
     } catch (err) {
@@ -911,10 +965,14 @@ function createDashboardRouter(container) {
             error: { code: 'BAD_REQUEST', message: `지원하지 않는 필드입니다: ${unknown.join(', ')}. 담당자 배정은 managerId를 사용하세요.` },
           });
         }
-        const { recipientRepo, ownerId } = container.repos(req);
+        const { recipientRepo, auditRepo, ownerId, writerId } = container.repos(req);
         const data = await recipientRepo.updateRecipient(ownerId, req.params.id, req.body || {});
         if (!data) {
           return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '대상자를 찾을 수 없습니다' } });
+        }
+        // 담당 변경은 접근 범위가 바뀌는 사건이다 — 감사에 남긴다 (인사이동 말소 추적)
+        if ('managerId' in (req.body || {}) || 'managerName' in (req.body || {}) || 'manager' in (req.body || {})) {
+          await auditRepo.log({ ownerId: writerId, actorId: req.user.id, action: 'recipient.assign', targetType: 'recipient', targetId: req.params.id, payload: { managerId: req.body.managerId ?? null }, ip: req.ip });
         }
         return res.json({ ok: true, data });
       } catch (err) {
@@ -1467,6 +1525,31 @@ function createDashboardRouter(container) {
     }
   });
 
+  // 가입 코드 재발급 — 4자리 랜덤. 유출 의심 시 마스터가 즉시 회전
+  router.post('/institutions/:id/reissue-code', requireAdmin, async (req, res, next) => {
+    try {
+      const { prisma } = require('../lib/prisma');
+      let code;
+      for (let attempt = 0; attempt < 50; attempt++) {
+        code = String(Math.floor(1000 + Math.random() * 9000));
+        const dup = await prisma.institution.findUnique({ where: { code } });
+        if (!dup) break;
+      }
+      const updated = await prisma.institution.update({
+        where: { id: req.params.id },
+        data: { code },
+      });
+      const { auditRepo, writerId } = container.repos(req);
+      await auditRepo.log({ ownerId: writerId, actorId: req.user.id, action: 'institution.reissue_code', targetType: 'institution', targetId: req.params.id, payload: { newCode: code }, ip: req.ip });
+      return res.json({ ok: true, data: { id: updated.id, name: updated.name, code: updated.code, phone: updated.phone, address: updated.address, createdAt: updated.createdAt } });
+    } catch (err) {
+      if (err && err.code === 'P2025') {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '기관을 찾을 수 없습니다' } });
+      }
+      next(err);
+    }
+  });
+
   router.delete('/institutions/:id', requireAdmin, async (req, res, next) => {
     try {
       const { institutionRepo } = container.repos(req);
@@ -1486,8 +1569,152 @@ function createDashboardRouter(container) {
 
   router.get('/master/overview', requireAdmin, async (req, res, next) => {
     try {
+      const mailer = require('../lib/mailer');
       const { auditRepo } = container.repos(req);
-      return res.json({ ok: true, data: await auditRepo.systemOverview() });
+      const data = await auditRepo.systemOverview();
+      return res.json({ ok: true, data: { ...data, smtpConfigured: mailer.isConfigured } });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // 점검 모드 토글 (마스터)
+  router.put('/system-config', requireAdmin, async (req, res, next) => {
+    try {
+      const { prisma } = require('../lib/prisma');
+      const { maintenance, maintenanceMessage } = req.body || {};
+      const entries = [
+        ['maintenance', String(Boolean(maintenance))],
+        ['maintenanceMessage', String(maintenanceMessage || '')],
+      ];
+      for (const [key, value] of entries) {
+        await prisma.systemConfig.upsert({ where: { key }, update: { value }, create: { key, value } });
+      }
+      return res.json({ ok: true, data: { maintenance: Boolean(maintenance), maintenanceMessage: maintenanceMessage || '' } });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // 로그인 잠금 해제 (5회 실패 잠금)
+  router.post('/accounts/:id/unlock', requireAdmin, async (req, res, next) => {
+    try {
+      const { prisma } = require('../lib/prisma');
+      const user = await prisma.user.findUnique({ where: { id: req.params.id }, select: { email: true } });
+      if (!user) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '계정을 찾을 수 없습니다' } });
+      }
+      container.dashboardService.unlockAccount(user.email);
+      return res.json({ ok: true, data: { success: true } });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // 세션 강제 종료 — 발급된 모든 토큰 무효화
+  router.post('/accounts/:id/terminate-sessions', requireAdmin, async (req, res, next) => {
+    try {
+      const { userRepo, auditRepo, writerId } = container.repos(req);
+      const result = await userRepo.terminateSessions(req.params.id);
+      if (result.notFound) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '계정을 찾을 수 없습니다' } });
+      }
+      await auditRepo.log({ ownerId: writerId, actorId: req.user.id, action: 'account.terminate_sessions', targetType: 'user', targetId: req.params.id, ip: req.ip });
+      return res.json({ ok: true, data: { success: true } });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // 초대 메일로 계정 생성 — 임시 비밀번호는 메일로만 나간다
+  router.post('/accounts/invite', requireAdmin, async (req, res, next) => {
+    try {
+      const crypto = require('crypto');
+      const mailer = require('../lib/mailer');
+      const { email, name, role, institutionId } = req.body || {};
+      if (!email || !name) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: '이메일과 이름은 필수입니다.' } });
+      }
+      const tempPassword = 'Hi' + crypto.randomBytes(5).toString('hex') + '!';
+      const { userRepo, auditRepo, writerId } = container.repos(req);
+      const created = await userRepo.createUser({ email, name, password: tempPassword, role: role || 'institution' });
+      if (institutionId) await userRepo.updateUser(created.id, { institutionId });
+      await mailer.sendMail({
+        to: email,
+        subject: '[안심하이] 계정 초대',
+        text: name + ' 님, 안심하이 계정이 생성되었습니다.\n\n이메일: ' + email + '\n임시 비밀번호: ' + tempPassword + '\n\n로그인 후 설정에서 비밀번호를 꼭 변경해 주세요.\nhttps://safe-hi.xyz/login',
+      });
+      await auditRepo.log({ ownerId: writerId, actorId: req.user.id, action: 'account.invite', targetType: 'user', targetId: created.id, payload: { email }, ip: req.ip });
+      const invitationUrl = `${process.env.PUBLIC_APP_URL || 'https://safe-hi.xyz'}/login?email=${encodeURIComponent(email)}`;
+      return res.status(201).json({ ok: true, data: { ...created, invitationUrl, invitationToken: tempPassword } });
+    } catch (err) {
+      if (err && /이미 사용|필수|8자/.test(err.message || '')) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: err.message } });
+      }
+      next(err);
+    }
+  });
+
+  // 담당 대상자 일괄 재배정 (퇴직 인수인계)
+  router.post('/managers/:id/reassign', requireCapability('manager:assign'), async (req, res, next) => {
+    try {
+      const { toManagerId } = req.body || {};
+      if (!toManagerId) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: 'toManagerId는 필수입니다.' } });
+      }
+      const { managerRepo, auditRepo, ownerId, writerId } = container.repos(req);
+      const result = await managerRepo.reassignRecipients(ownerId, req.params.id, toManagerId);
+      await auditRepo.log({ ownerId: writerId, actorId: req.user.id, action: 'recipient.assign', targetType: 'manager', targetId: req.params.id, payload: { toManagerId, moved: result.moved }, ip: req.ip });
+      return res.json({ ok: true, data: result });
+    } catch (err) {
+      if (err && /찾을 수 없/.test(err.message || '')) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: err.message } });
+      }
+      next(err);
+    }
+  });
+
+  // 기관 데이터 JSON 내보내기 (백업)
+  router.get('/master/export', requireAdmin, async (req, res, next) => {
+    try {
+      const { prisma } = require('../lib/prisma');
+      const instId = req.query.institutionId;
+      const members = instId
+        ? (await prisma.user.findMany({ where: { institutionId: String(instId) }, select: { id: true } })).map((u) => u.id)
+        : null;
+      const ownerFilter = members ? { ownerId: { in: members } } : {};
+      const [users, managers, recipients] = await Promise.all([
+        prisma.user.findMany({
+          where: instId ? { institutionId: String(instId) } : {},
+          select: { email: true, name: true, role: true, createdAt: true },
+        }),
+        prisma.manager.findMany({ where: ownerFilter, select: { name: true, status: true, phone: true } }),
+        prisma.recipient.findMany({ where: ownerFilter, select: { name: true, age: true, birthDate: true, status: true, address: true } }),
+      ]);
+      res.setHeader('Content-Disposition', 'attachment; filename="safehi-export.json"');
+      return res.json({ exportedAt: new Date().toISOString(), users, managers, recipients });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // 기관 업무 데이터 초기화 (계정은 유지) — 시연 리셋용
+  router.delete('/master/institutions/:id/data', requireAdmin, async (req, res, next) => {
+    try {
+      const { prisma } = require('../lib/prisma');
+      const members = (await prisma.user.findMany({ where: { institutionId: req.params.id }, select: { id: true } })).map((u) => u.id);
+      if (members.length === 0) {
+        return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '소속 계정이 없는 기관입니다' } });
+      }
+      const ownerIn = { ownerId: { in: members } };
+      const [r1, r2, r3] = await prisma.$transaction([
+        prisma.recipient.deleteMany({ where: ownerIn }),
+        prisma.manager.deleteMany({ where: ownerIn }),
+        prisma.notification.deleteMany({ where: ownerIn }),
+      ]);
+      const { auditRepo, writerId } = container.repos(req);
+      await auditRepo.log({ ownerId: writerId, actorId: req.user.id, action: 'institution.reset_data', targetType: 'institution', targetId: req.params.id, payload: { recipients: r1.count, managers: r2.count }, ip: req.ip });
+      return res.json({ ok: true, data: { recipients: r1.count, managers: r2.count, notifications: r3.count } });
     } catch (err) {
       next(err);
     }
@@ -1497,7 +1724,13 @@ function createDashboardRouter(container) {
   router.get('/audit-logs', requireCapability('account:grant'), async (req, res, next) => {
     try {
       const { auditRepo } = container.repos(req);
-      const data = await auditRepo.list({ action: req.query.action, limit: req.query.limit });
+      const data = await auditRepo.list({
+        action: req.query.action,
+        limit: req.query.limit,
+        from: req.query.from,
+        to: req.query.to,
+        actorId: req.query.actorId,
+      });
       return res.json({ ok: true, data });
     } catch (err) {
       next(err);

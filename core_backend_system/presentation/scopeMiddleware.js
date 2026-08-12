@@ -16,12 +16,26 @@ async function resolveScope(req, res, next) {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
-      select: { id: true, role: true, institutionId: true },
+      select: { id: true, role: true, institutionId: true, isActive: true, sessionVersion: true },
     });
     if (!user) {
       return res.status(401).json({
         ok: false,
         error: { code: 'UNAUTHORIZED', message: '계정을 찾을 수 없습니다. 다시 로그인해 주세요.' },
+      });
+    }
+
+    if (user.isActive === false) {
+      return res.status(401).json({
+        ok: false,
+        error: { code: 'ACCOUNT_SUSPENDED', message: '정지된 계정입니다. 관리자에게 문의해 주세요.' },
+      });
+    }
+    // 세션 강제 종료: sessionVersion 이 올라가면 이전 토큰은 전부 무효
+    if (req.user.sv !== undefined && req.user.sv !== user.sessionVersion) {
+      return res.status(401).json({
+        ok: false,
+        error: { code: 'SESSION_TERMINATED', message: '세션이 종료되었습니다. 다시 로그인해 주세요.' },
       });
     }
 

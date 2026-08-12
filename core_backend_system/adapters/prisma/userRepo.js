@@ -23,6 +23,8 @@ class PrismaUserRepo {
       phone: u.phone || '',
       role: u.role,
       emailVerified: u.emailVerified,
+      isActive: u.isActive !== false,
+      lastLoginAt: u.lastLoginAt ? u.lastLoginAt.toISOString() : null,
       createdAt: u.createdAt instanceof Date ? u.createdAt.toISOString() : u.createdAt,
       updatedAt: u.updatedAt instanceof Date ? u.updatedAt.toISOString() : u.updatedAt || null,
       ...(counts ? { recipientCount: counts.recipients, managerCount: counts.managers } : {}),
@@ -66,7 +68,7 @@ class PrismaUserRepo {
     return this._serialize(created);
   }
 
-  async updateUser(id, { name, role, phone, institutionId, email } = {}) {
+  async updateUser(id, { name, role, phone, institutionId, email, isActive } = {}) {
     const existing = await this.prisma.user.findUnique({ where: { id } });
     if (!existing) return null;
 
@@ -80,6 +82,7 @@ class PrismaUserRepo {
     }
     if (name !== undefined) patch.name = String(name).trim();
     if (phone !== undefined) patch.phone = phone || null;
+    if (isActive !== undefined) patch.isActive = Boolean(isActive);
     if (institutionId !== undefined) {
       if (institutionId) {
         const inst = await this.prisma.institution.findUnique({ where: { id: institutionId } });
@@ -170,6 +173,14 @@ class PrismaUserRepo {
       data: { capabilityGrants: { grants: clean(grants), revokes: clean(revokes) } },
     });
     return this.getCapabilities(id);
+  }
+
+  /** 세션 강제 종료 — 발급된 모든 토큰 무효화 */
+  async terminateSessions(id) {
+    const existing = await this.prisma.user.findUnique({ where: { id }, select: { id: true } });
+    if (!existing) return { success: false, notFound: true };
+    await this.prisma.user.update({ where: { id }, data: { sessionVersion: { increment: 1 } } });
+    return { success: true };
   }
 
   async deleteUser(currentUserId, id) {

@@ -28,7 +28,7 @@ const RESET_TOKEN_TTL_MS = 30 * 60 * 1000; // 30분
 const REGISTERABLE_ROLES = ['caregiver', 'institution'];
 
 function buildToken(user) {
-  return signToken({ userId: user.id, email: user.email, role: user.role });
+  return signToken({ userId: user.id, email: user.email, role: user.role, sv: user.sessionVersion ?? 0 });
 }
 
 function safeUser(user, institution = null, managerId = null) {
@@ -73,6 +73,10 @@ class DashboardService {
       return { success: false, error: '이메일 또는 비밀번호가 올바르지 않습니다.' };
     }
 
+    if (user.isActive === false) {
+      return { success: false, error: '정지된 계정입니다. 관리자에게 문의해 주세요.' };
+    }
+
     const ok = await comparePassword(password, user.password);
     if (!ok) {
       const locked = this._recordFailure(normalizedEmail);
@@ -85,6 +89,8 @@ class DashboardService {
     }
 
     delete loginAttempts[normalizedEmail];
+    // 마지막 로그인 시각 — 실패해도 로그인을 막지 않는다
+    prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } }).catch(() => null);
     return {
       success: true,
       data: {
@@ -92,6 +98,12 @@ class DashboardService {
         token: buildToken(user),
       },
     };
+  }
+
+  /** 로그인 잠금 해제 (마스터 콘솔) */
+  unlockAccount(email) {
+    delete loginAttempts[String(email || '').toLowerCase()];
+    return { success: true };
   }
 
   _recordFailure(email) {

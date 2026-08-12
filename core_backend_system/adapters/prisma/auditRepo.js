@@ -12,14 +12,20 @@ class PrismaAuditRepo {
   }
 
   /** 감사 기록 조회 (마스터 콘솔) — 행위자 이메일을 붙여 내려준다 */
-  async list({ action, limit = 100 } = {}) {
+  async list({ action, limit = 500, from, to, actorId } = {}) {
     const where = {};
     if (action && action !== 'all') where.action = { startsWith: action };
+    if (actorId) where.actorId = String(actorId);
+    if (from || to) {
+      where.createdAt = {};
+      if (from) where.createdAt.gte = new Date(from);
+      if (to) where.createdAt.lte = new Date(to);
+    }
 
     const items = await this.prisma.auditLog.findMany({
       where,
       orderBy: { createdAt: 'desc' },
-      take: Math.min(Number(limit) || 100, 500),
+      take: Math.min(Number(limit) || 500, 5000),
     });
 
     const actorIds = [...new Set(items.map((i) => i.actorId).filter(Boolean))];
@@ -61,6 +67,27 @@ class PrismaAuditRepo {
         this.prisma.user.count({ where: { role: { in: ['institution', 'user'] } } }),
         this.prisma.user.count({ where: { role: 'caregiver' } }),
       ]);
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const [pendingCareLogs, signups7d, ackedRows, careLogs7dRaw, dbSizeRaw] = await Promise.all([
+      this.prisma.careLog.count({ where: { status: { in: ['submitted', 'in_review', 'pending', 'urgent'] } } }),
+      this.prisma.user.count({ where: { createdAt: { gte: weekAgo } } }),
+      this.prisma.riskQueue.findMany({
+        where: { acknowledgedAt: { not: null } },
+        select: { raisedAt: true, acknowledgedAt: true },
+        take: 500,
+      }),
+      this.prisma.$queryRaw`SELECT to_char("createdAt", 'MM-DD') AS day, count(*)::int AS count
+        FROM care_logs WHERE "createdAt" >= ${weekAgo} GROUP BY 1 ORDER BY 1`,
+      this.prisma.$queryRaw`SELECT pg_database_size(current_database())::bigint AS size`,
+    ]);
+    const ackDurations = ackedRows
+      .map((r) => new Date(r.acknowledgedAt).getTime() - new Date(r.raisedAt).getTime())
+      .filter((ms) => ms >= 0);
+    const avgAckMinutes = ackDurations.length
+      ? Math.round(ackDurations.reduce((a, b) => a + b, 0) / ackDurations.length / 60000)
+      : null;
+    const dbSizeMb = Math.round(Number(dbSizeRaw?.[0]?.size ?? 0) / 1024 / 1024);
+
     const recentAccounts = await this.prisma.user.findMany({
       orderBy: { createdAt: 'desc' },
       take: 5,
@@ -73,13 +100,16 @@ class PrismaAuditRepo {
     const perInstitution = [];
     for (const inst of instRows) {
       const memberIds = inst.users.map((u) => u.id);
-      const [rcp, mgr] = await Promise.all([
+      const [rcp, mgr, riskOpen, riskOverdue] = await Promise.all([
         this.prisma.recipient.count({ where: { ownerId: { in: memberIds } } }),
         this.prisma.manager.count({ where: { ownerId: { in: memberIds } } }),
+        this.prisma.riskQueue.count({ where: { ownerId: { in: memberIds }, acknowledgedAt: null } }),
+        this.prisma.riskQueue.count({ where: { ownerId: { in: memberIds }, acknowledgedAt: null, dueAt: { lt: now } } }),
       ]);
       perInstitution.push({
         id: inst.id, name: inst.name, code: inst.code,
         userCount: memberIds.length, recipientCount: rcp, managerCount: mgr,
+        riskOpen, riskOverdue,
       });
     }
 
@@ -95,6 +125,11 @@ class PrismaAuditRepo {
         id: u.id, email: u.email, name: u.name, role: u.role, createdAt: u.createdAt.toISOString(),
       })),
       perInstitution,
+      pendingCareLogs,
+      signups7d,
+      avgAckMinutes,
+      careLogs7d: careLogs7dRaw,
+      dbSizeMb,
     };
   }
 
