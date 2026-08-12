@@ -1267,14 +1267,25 @@ function createDashboardRouter(container) {
 
   // ============================================================
   // 시스템 (DB 관리 패널) — 관리자 전용
-  // 비밀번호는 호출한 관리자 본인 계정의 비밀번호로 재확인한다.
+  // ADMIN_SYSTEM_PASSWORD 가 설정돼 있으면 그 값으로, 없으면
+  // 호출한 관리자 본인 계정의 비밀번호로 재확인한다.
   // ============================================================
+
+  async function verifySystemPassword(req, password) {
+    const configured = process.env.ADMIN_SYSTEM_PASSWORD;
+    if (configured) {
+      const given = Buffer.from(String(password || ''));
+      const expected = Buffer.from(String(configured));
+      return given.length === expected.length && require('crypto').timingSafeEqual(given, expected);
+    }
+    const { systemRepo } = container.repos(req);
+    return systemRepo.verifyUserPassword(req.user.id, password);
+  }
 
   router.post('/system/postgres-access/verify', requireAdmin, async (req, res, next) => {
     try {
       const { password } = req.body || {};
-      const { systemRepo } = container.repos(req);
-      const ok = await systemRepo.verifyUserPassword(req.user.id, password);
+      const ok = await verifySystemPassword(req, password);
       if (!ok) {
         return res
           .status(401)
@@ -1289,8 +1300,7 @@ function createDashboardRouter(container) {
   router.get('/system/postgres-status', requireAdmin, async (req, res, next) => {
     try {
       const password = req.headers['x-admin-system-password'];
-      const { systemRepo } = container.repos(req);
-      const ok = await systemRepo.verifyUserPassword(req.user.id, password);
+      const ok = await verifySystemPassword(req, password);
       if (!ok) {
         return res
           .status(401)
@@ -1319,6 +1329,7 @@ function createDashboardRouter(container) {
         });
       }
 
+      const { systemRepo } = container.repos(req);
       const data = await systemRepo.getPostgresStatus();
       return res.json({ ok: true, data });
     } catch (err) {
