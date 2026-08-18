@@ -43,3 +43,6 @@ __pycache__/
 
 # SSL certificates
 **/ssl/
+
+# 작업 중 만든 .env 백업 — 키가 들어 있으므로 절대 올리지 않는다
+.env.bak.*

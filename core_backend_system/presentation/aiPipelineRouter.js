@@ -12,17 +12,65 @@ const express = require('express');
 const multer = require('multer');
 const http = require('http');
 const https = require('https');
+const { spawn } = require('child_process');
+const { summarizeCareRecord } = require('../services/careRecordSummary');
+
+/**
+ * 어떤 오디오든 STT 서버가 받는 형식으로 바꾼다 — 16kHz 모노 16bit WAV.
+ *
+ * 앱이 항상 WAV 를 보낼 수 있으면 좋겠지만 그렇지 못하다. 웹 브라우저는
+ * MediaRecorder 로만 녹음할 수 있어 webm/opus 로 나오고, 안드로이드 기본
+ * 인코더는 m4a(aac) 다. STT 서버는 파일 이름이 .wav 로 끝나지 않으면
+ * 400 을 돌려준다.
+ *
+ * 이미 맞는 WAV 면 ffmpeg 를 태워도 결과가 같지만, 헤더가 어긋난 WAV 도
+ * 있어서 한 번 통과시키는 편이 안전하다.
+ */
+function toWav16kMono(inputBuffer) {
+  return new Promise((resolve, reject) => {
+    // `-i pipe:0` 로 받아 `pipe:1` 로 뱉는다. 디스크를 거치지 않으므로
+    // 상담 녹음이 서버 파일시스템에 남지 않는다.
+    const ff = spawn('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error',
+      '-i', 'pipe:0',
+      '-ac', '1', // 모노 — 화자분리는 STT 쪽 pyannote 가 한다
+      '-ar', '16000', // whisper 가 기대하는 표본율
+      '-c:a', 'pcm_s16le',
+      '-f', 'wav',
+      'pipe:1',
+    ]);
+
+    const out = [];
+    const err = [];
+    ff.stdout.on('data', (c) => out.push(c));
+    ff.stderr.on('data', (c) => err.push(c));
+    ff.on('error', (e) => reject(new Error(`ffmpeg 실행 실패: ${e.message}`)));
+    ff.on('close', (code) => {
+      if (code !== 0) {
+        return reject(new Error(`ffmpeg 변환 실패(code ${code}): ${Buffer.concat(err).toString().slice(0, 300)}`));
+      }
+      resolve(Buffer.concat(out));
+    });
+
+    ff.stdin.on('error', () => {}); // ffmpeg 가 먼저 끊으면 EPIPE 가 난다
+    ff.stdin.end(inputBuffer);
+  });
+}
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
+  // 예전에는 WAV 만 받았다. 그런데 웹은 webm/opus, 안드로이드는 m4a 로만
+  // 녹음돼서 실제 기기에서 올린 파일이 문 앞에서 전부 막혔다.
+  // 형식은 서버가 ffmpeg 로 맞춘다 — 여기서는 오디오인지만 본다.
   fileFilter: (_req, file, cb) => {
-    const allowed = ['audio/wav', 'audio/wave', 'audio/x-wav', 'application/octet-stream'];
-    if (allowed.includes(file.mimetype) || file.originalname.endsWith('.wav')) {
-      cb(null, true);
-    } else {
-      cb(new Error('WAV 파일만 업로드 가능합니다.'));
-    }
+    const okType = /^audio\//.test(file.mimetype)
+      || file.mimetype === 'video/webm' // MediaRecorder 는 소리만 담아도 video/webm 을 쓴다
+      || file.mimetype === 'application/octet-stream';
+    const okExt = /\.(wav|webm|m4a|mp4|aac|ogg|opus|mp3|caf|3gp|amr|flac)$/i
+      .test(file.originalname || '');
+    if (okType || okExt) cb(null, true);
+    else cb(new Error('오디오 파일만 업로드 가능합니다.'));
   },
 });
 
@@ -70,6 +118,19 @@ function createAiPipelineRouter(config = {}) {
   const AI_HOST = config.aiHost || process.env.AI_HOST || '127.0.0.1';
   const AI_PORT = Number(config.aiPort || process.env.AI_PORT || 5000);
 
+  // STT 는 보고서 생성과 다른 서버에 있다.
+  //
+  // 예전에는 둘 다 AI_HOST:AI_PORT(=ai_dummy) 로 보냈는데, ai_dummy 는
+  // /health 와 /v1/infer 만 있는 껍데기라 /stt/analyze 가 404 였다.
+  // 실제 엔진은 이 호스트의 10001 번(AI-backend `api/stt_server.py`,
+  // faster-whisper + pyannote)에서 29일째 돌고 있었다.
+  // 컨테이너에서는 도커 브리지 게이트웨이(172.17.0.1)로 호스트에 닿는다.
+  const STT_HOST = config.sttHost || process.env.STT_HOST || '172.17.0.1';
+  const STT_PORT = Number(config.sttPort || process.env.STT_PORT || 10001);
+  // 업로드 필드 이름도 다르다 — 이 서버는 `audio` 가 아니라 `file` 로 받는다.
+  const STT_PATH = config.sttPath || process.env.STT_PATH || '/api/stt-infer';
+  const STT_FIELD = config.sttField || process.env.STT_FIELD || 'file';
+
   // ────────────────────────────────────────────────────────────
   // POST /core/pipeline/stt/upload
   // Content-Type: multipart/form-data
@@ -87,14 +148,33 @@ function createAiPipelineRouter(config = {}) {
 
       const { visitId, managerId } = req.body || {};
 
+      // 어떤 형식으로 올라왔든 16kHz 모노 WAV 로 맞춘다.
+      let wavBuffer;
+      try {
+        wavBuffer = await toWav16kMono(req.file.buffer);
+      } catch (convErr) {
+        console.error('[pipeline/stt] 오디오 변환 실패:', convErr.message);
+        return res.status(400).json({
+          ok: false,
+          error: { code: 'AUDIO_DECODE_FAILED', message: `녹음 파일을 읽지 못했습니다: ${convErr.message}` },
+        });
+      }
+      if (!wavBuffer.length) {
+        return res.status(400).json({
+          ok: false,
+          error: { code: 'EMPTY_AUDIO', message: '녹음이 비어 있습니다.' },
+        });
+      }
+
       // multipart boundary 재구성 — Flask 가 파일을 그대로 받도록 FormData 형식 전송
       const boundary = `----FormBoundary${Date.now()}`;
       const CRLF = '\r\n';
-      const filename = req.file.originalname || 'audio.wav';
+      // STT 서버는 확장자가 .wav 가 아니면 400 을 준다. 변환했으므로 .wav 로 보낸다.
+      const filename = 'audio.wav';
 
       const partHeader = Buffer.from(
         `--${boundary}${CRLF}` +
-        `Content-Disposition: form-data; name="audio"; filename="${filename}"${CRLF}` +
+        `Content-Disposition: form-data; name="${STT_FIELD}"; filename="${filename}"${CRLF}` +
         `Content-Type: audio/wav${CRLF}${CRLF}`
       );
       const metaPart = visitId || managerId
@@ -106,12 +186,12 @@ function createAiPipelineRouter(config = {}) {
         : Buffer.alloc(0);
       const tail = Buffer.from(`${CRLF}--${boundary}--${CRLF}`);
 
-      const body = Buffer.concat([partHeader, req.file.buffer, metaPart, tail]);
+      const body = Buffer.concat([partHeader, wavBuffer, metaPart, tail]);
 
       let flaskResult;
       try {
         flaskResult = await forwardToFlask(
-          { host: AI_HOST, port: AI_PORT, path: '/stt/analyze' },
+          { host: STT_HOST, port: STT_PORT, path: STT_PATH },
           body,
           `multipart/form-data; boundary=${boundary}`
         );
@@ -131,6 +211,48 @@ function createAiPipelineRouter(config = {}) {
       next(err);
     }
   });
+
+  // ────────────────────────────────────────────────────────────
+  // POST /core/pipeline/care-record/summarize
+  // Body: { transcript, tags?: string[], workerGrade?: string }
+  // 전사문을 상담기록 다섯 섹션으로 정리해 돌려준다.
+  // ────────────────────────────────────────────────────────────
+  router.post(
+    '/care-record/summarize',
+    express.json({ limit: '1mb' }),
+    async (req, res, next) => {
+      try {
+        const { transcript, tags, workerGrade } = req.body || {};
+        const result = await summarizeCareRecord({
+          transcript: (transcript || '').toString(),
+          tags: Array.isArray(tags) ? tags.map(String) : [],
+          workerGrade: (workerGrade || '').toString(),
+        });
+        return res.json({ ok: true, data: result });
+      } catch (err) {
+        // 요약 실패는 서버 장애가 아니다 — 앱이 안내하고 손으로 적을 수 있게
+        // 사유를 그대로 돌려준다.
+        const known = ['EMPTY_TRANSCRIPT', 'NO_API_KEY', 'BAD_MODEL_OUTPUT', 'EMPTY_SUMMARY'];
+        if (known.includes(err.code)) {
+          return res.status(400).json({
+            ok: false,
+            error: { code: err.code, message: err.message },
+          });
+        }
+        if (err.code === 'UPSTREAM_ERROR' || err.name === 'AbortError') {
+          console.error('[pipeline/care-record] 요약 실패:', err.message);
+          return res.status(502).json({
+            ok: false,
+            error: {
+              code: 'SUMMARY_UNAVAILABLE',
+              message: '상담기록을 정리하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+            },
+          });
+        }
+        return next(err);
+      }
+    }
+  );
 
   // ────────────────────────────────────────────────────────────
   // POST /core/pipeline/report/generate

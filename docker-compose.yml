@@ -40,6 +40,13 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
       AI_HOST: ai_dummy
       AI_PORT: "5000"
+      # STT 는 ai_dummy(껍데기)가 아니라 호스트의 실제 엔진으로 보낸다.
+      # AI-backend `api/stt_server.py` — faster-whisper + pyannote, 포트 10001.
+      # 172.17.0.1 은 컨테이너에서 본 도커 브리지 게이트웨이(=호스트).
+      STT_HOST: "172.17.0.1"
+      STT_PORT: "10001"
+      STT_PATH: "/api/stt-infer"
+      STT_FIELD: "file"
       CORE_PORT: "4100"
       USE_INMEMORY: "false"
     depends_on:
