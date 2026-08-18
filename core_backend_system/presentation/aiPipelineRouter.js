@@ -13,6 +13,9 @@ const multer = require('multer');
 const http = require('http');
 const https = require('https');
 const { spawn } = require('child_process');
+const fs = require('fs/promises');
+const os = require('os');
+const path = require('path');
 const { summarizeCareRecord } = require('../services/careRecordSummary');
 
 /**
@@ -26,13 +29,33 @@ const { summarizeCareRecord } = require('../services/careRecordSummary');
  * 이미 맞는 WAV 면 ffmpeg 를 태워도 결과가 같지만, 헤더가 어긋난 WAV 도
  * 있어서 한 번 통과시키는 편이 안전하다.
  */
-function toWav16kMono(inputBuffer) {
+async function toWav16kMono(inputBuffer) {
+  // 입력은 파이프가 아니라 임시 파일로 준다.
+  //
+  // 처음에는 `-i pipe:0` 으로 넣었다. 녹음이 디스크에 남지 않아 좋았지만,
+  // m4a·mp4 는 색인(moov atom)이 파일 끝에 붙어서 ffmpeg 가 그걸 읽으려면
+  // 되감기를 해야 한다. 파이프는 되감을 수 없어 "moov atom not found" 로
+  // 통째로 거부됐다. WAV·webm 은 앞에서부터 읽혀 통과했기 때문에
+  // 안드로이드·iOS 가 쓰는 m4a 에서만 터졌다.
+  //
+  // 대신 변환이 끝나면 곧바로 지운다 — 상담 녹음이 서버에 남지 않아야 한다.
+  const tmpPath = path.join(
+    os.tmpdir(),
+    `care-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
+  await fs.writeFile(tmpPath, inputBuffer);
+  try {
+    return await runFfmpeg(tmpPath);
+  } finally {
+    await fs.unlink(tmpPath).catch(() => {});
+  }
+}
+
+function runFfmpeg(inputPath) {
   return new Promise((resolve, reject) => {
-    // `-i pipe:0` 로 받아 `pipe:1` 로 뱉는다. 디스크를 거치지 않으므로
-    // 상담 녹음이 서버 파일시스템에 남지 않는다.
     const ff = spawn('ffmpeg', [
       '-hide_banner', '-loglevel', 'error',
-      '-i', 'pipe:0',
+      '-i', inputPath,
       '-ac', '1', // 모노 — 화자분리는 STT 쪽 pyannote 가 한다
       '-ar', '16000', // whisper 가 기대하는 표본율
       '-c:a', 'pcm_s16le',
@@ -52,8 +75,6 @@ function toWav16kMono(inputBuffer) {
       resolve(Buffer.concat(out));
     });
 
-    ff.stdin.on('error', () => {}); // ffmpeg 가 먼저 끊으면 EPIPE 가 난다
-    ff.stdin.end(inputBuffer);
   });
 }
 
