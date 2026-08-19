@@ -83,6 +83,9 @@ function createCoreApp(options = {}) {
   app.use('/core/pipeline', createAiPipelineRouter({
     aiHost: process.env.AI_HOST,
     aiPort: process.env.AI_PORT,
+    // 정책 추천이 대상자 프로필을 서버에서 읽는다. 앱이 나이·독거·질환을
+    // 다시 실어 보내면 두 곳이 어긋날 수 있다.
+    container,
   }));
 
   app.get('/core/health', (req, res) => {

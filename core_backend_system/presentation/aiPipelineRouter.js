@@ -17,6 +17,9 @@ const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const { summarizeCareRecord } = require('../services/careRecordSummary');
+const { recommendPolicies } = require('../services/policyRecommendation');
+const { requireAuth } = require('./authMiddleware');
+const { resolveScope } = require('./scopeMiddleware');
 
 /**
  * 어떤 오디오든 STT 서버가 받는 형식으로 바꾼다 — 16kHz 모노 16bit WAV.
@@ -281,6 +284,70 @@ function createAiPipelineRouter(config = {}) {
           });
         }
         return next(err);
+      }
+    }
+  );
+
+  // ────────────────────────────────────────────────────────────
+  // POST /core/pipeline/care-record/recommend-policies
+  // Body: { transcript, recipientId?, riskGrade?, profile? }
+  // 상담 내용(정책하이 RAG) + 대상자 프로필(서버 조회)로 복지 정책을 추천한다.
+  // ────────────────────────────────────────────────────────────
+  router.post(
+    '/care-record/recommend-policies',
+    // 대상자 프로필을 읽으려면 누가 묻는지 알아야 한다. 대시보드 라우터와
+    // 같은 인증·범위 미들웨어를 이 경로에만 건다 — STT·요약은 DB 를
+    // 건드리지 않아 그대로 둔다.
+    requireAuth,
+    resolveScope,
+    express.json({ limit: '1mb' }),
+    async (req, res, next) => {
+      try {
+        const { transcript, recipientId, riskGrade, profile: given } = req.body || {};
+
+        // 프로필은 서버가 알고 있는 값을 우선한다. 앱이 보낸 것은 서버에
+        // 없을 때만 쓴다(오프라인 표본 등).
+        let profile = { ...(given && typeof given === 'object' ? given : {}) };
+        if (recipientId && config.container) {
+          try {
+            const repos = config.container.repos(req);
+            const restrict =
+              repos.callerRole === 'caregiver' ? (repos.callerManagerId || '__none__') : undefined;
+            const r = await repos.recipientRepo.getRecipientById(repos.ownerId, recipientId, restrict);
+            if (r) {
+              profile = {
+                age: r.age ?? profile.age,
+                gender: r.gender ?? profile.gender,
+                livingAlone: r.livingAlone ?? profile.livingAlone,
+                diseases: r.healthInfo?.diseases ?? profile.diseases ?? [],
+                region: r.basicInfo?.address ?? profile.region ?? '',
+                riskGrade: riskGrade || r.status || profile.riskGrade,
+              };
+            }
+          } catch (e) {
+            // 프로필을 못 읽어도 상담 내용만으로 추천은 한다.
+            console.warn('[pipeline/policies] 프로필 조회 실패:', e.message);
+          }
+        }
+        if (riskGrade && !profile.riskGrade) profile.riskGrade = riskGrade;
+
+        const result = await recommendPolicies({
+          transcript: (transcript || '').toString(),
+          profile,
+        });
+        return res.json({ ok: true, data: { ...result, profileUsed: profile } });
+      } catch (err) {
+        if (err.code === 'EMPTY_TRANSCRIPT') {
+          return res.status(400).json({ ok: false, error: { code: err.code, message: err.message } });
+        }
+        console.error('[pipeline/policies] 추천 실패:', err.message);
+        return res.status(502).json({
+          ok: false,
+          error: {
+            code: 'RECOMMEND_UNAVAILABLE',
+            message: '복지 정책 추천을 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.',
+          },
+        });
       }
     }
   );
