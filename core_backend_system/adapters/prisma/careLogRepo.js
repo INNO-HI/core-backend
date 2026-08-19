@@ -76,6 +76,12 @@ class PrismaCareLogRepo {
         visitType: l.visitType || 'visit',
         registeredAt: l.createdAt.toISOString(),
         status: l.status,
+        // 목록 카드가 첫 줄에 보여줄 요약. 이게 없어서 앱 기록 탭 카드마다
+        // "남기신 내용이 아직 올라오지 않았습니다" 가 떴다 — 상세에는 있는데
+        // 목록만 비어 있었다.
+        summary: l.summary || '',
+        sessionNo: l.sessionNo ?? null,
+        elapsedSeconds: l.elapsedSeconds ?? null,
       })),
       totalCount,
       statusCounts,
@@ -115,6 +121,9 @@ class PrismaCareLogRepo {
         status: l.status,
         registeredAt: l.createdAt.toISOString(),
         rejectionReason: l.rejectionReason || null,
+        summary: l.summary || '',
+        sessionNo: l.sessionNo ?? null,
+        elapsedSeconds: l.elapsedSeconds ?? null,
       })),
       totalCount,
     };
