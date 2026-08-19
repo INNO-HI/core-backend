@@ -139,6 +139,20 @@ function forwardToFlask(options, bodyBuffer, contentType) {
 function createAiPipelineRouter(config = {}) {
   const router = express.Router();
 
+  // 요청마다 한 줄. 어느 단계까지 왔고 얼마나 걸렸는지가 남아야
+  // "정책 추천이 안 떴다"는 말을 들었을 때 앱 문제인지 서버 문제인지
+  // 바로 가른다. 몸통은 남기지 않는다 — 전사문은 개인정보다.
+  router.use((req, res, next) => {
+    const t0 = Date.now();
+    res.on('finish', () => {
+      console.log(
+        `[pipeline] ${req.method} ${req.path} → ${res.statusCode} ` +
+        `(${Date.now() - t0}ms, ${req.ip || '-'})`
+      );
+    });
+    next();
+  });
+
   const AI_HOST = config.aiHost || process.env.AI_HOST || '127.0.0.1';
   const AI_PORT = Number(config.aiPort || process.env.AI_PORT || 5000);
 
