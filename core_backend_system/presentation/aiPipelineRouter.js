@@ -174,7 +174,17 @@ function createAiPipelineRouter(config = {}) {
       try {
         wavBuffer = await toWav16kMono(req.file.buffer);
       } catch (convErr) {
-        console.error('[pipeline/stt] 오디오 변환 실패:', convErr.message);
+        // 무엇이 올라왔는지 남긴다. 형식이 안 맞는지, 파일이 잘렸는지,
+        // 아예 비었는지에 따라 고칠 곳이 다르다.
+        const buf = req.file.buffer;
+        const head = buf.subarray(0, 24).toString('hex');
+        // mp4 계열은 앞쪽에 'ftyp' 박스가 온다. 그 뒤 브랜드까지 같이 본다.
+        const ascii = buf.subarray(0, 32).toString('latin1').replace(/[^\x20-\x7e]/g, '.');
+        console.error(
+          `[pipeline/stt] 오디오 변환 실패: ${convErr.message}\n` +
+          `  파일명=${req.file.originalname} mime=${req.file.mimetype} ` +
+          `크기=${buf.length}B\n  머리=${head}\n  ascii=${ascii}`
+        );
         return res.status(400).json({
           ok: false,
           error: { code: 'AUDIO_DECODE_FAILED', message: `녹음 파일을 읽지 못했습니다: ${convErr.message}` },
