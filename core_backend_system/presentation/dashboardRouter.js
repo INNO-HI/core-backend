@@ -11,6 +11,24 @@ const { requireAuth, requireAdmin, requireCapability } = require('./authMiddlewa
 const { resolveScope } = require('./scopeMiddleware');
 const { verifyToken } = require('../lib/auth');
 const { prisma } = require('../lib/prisma');
+const multer = require('multer');
+const fs = require('fs/promises');
+const path = require('path');
+const crypto = require('crypto');
+
+/**
+ * 현장 사진 저장 위치. 컨테이너 안 경로라 재시작해도 남도록 compose 에서
+ * 볼륨으로 붙인다(UPLOAD_DIR). URL 은 /core/dashboard/files/... 로 서빙한다.
+ */
+const UPLOAD_DIR = process.env.UPLOAD_DIR || '/data/uploads';
+const photoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 5 }, // 사진 5장, 장당 10MB
+  fileFilter: (_req, file, cb) => {
+    if (/^image\/(jpeg|png|heic|heif|webp)$/.test(file.mimetype)) cb(null, true);
+    else cb(new Error('이미지 파일만 올릴 수 있습니다.'));
+  },
+});
 
 // ── 앱 요청 모양 정규화 (BACKEND_REQUEST §11 — 서버가 양쪽 모양을 수용한다) ──
 
@@ -551,6 +569,73 @@ function createDashboardRouter(container) {
       if (err && /찾을 수 없|배정|형식/.test(err.message || '')) {
         return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: err.message } });
       }
+      next(err);
+    }
+  });
+
+  // ── 현장 사진 첨부 ──
+  //
+  // 앱은 사진을 고르기만 하고 개수만 보내고 있었다("현장 사진 1장 첨부").
+  // 파일이 갈 곳이 없어서였다. 일지를 만든 직후 여기로 올린다.
+  // 저장 파일명은 무작위라 URL 만으로는 누구 사진인지 알 수 없다.
+  router.post(
+    '/care-logs/:id/photos',
+    requireCapability('careLog:write'),
+    photoUpload.array('photos', 5),
+    async (req, res, next) => {
+      try {
+        const files = req.files || [];
+        if (!files.length) {
+          return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: 'photos 필드에 이미지를 첨부해 주세요.' } });
+        }
+        const repos = container.repos(req);
+        const restrict = restrictOf(repos);
+        const log = await repos.careLogRepo.getCareLogById(repos.ownerId, req.params.id, restrict);
+        if (!log) {
+          return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '돌봄 일지를 찾을 수 없습니다.' } });
+        }
+
+        const dir = path.join(UPLOAD_DIR, 'care-logs', req.params.id);
+        await fs.mkdir(dir, { recursive: true });
+        const urls = [];
+        for (const f of files) {
+          const ext = (f.mimetype.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
+          const name = `${crypto.randomBytes(12).toString('hex')}.${ext}`;
+          await fs.writeFile(path.join(dir, name), f.buffer);
+          urls.push(`/core/dashboard/files/care-logs/${req.params.id}/${name}`);
+        }
+
+        const existing = Array.isArray(log.photos) ? log.photos : [];
+        const photos = [...existing, ...urls].slice(0, 5);
+        await prisma.careLog.updateMany({
+          where: { id: req.params.id, ownerId: repos.ownerId },
+          data: { photos },
+        });
+        return res.status(201).json({ ok: true, data: { photos } });
+      } catch (err) {
+        if (err && /이미지 파일만|File too large|Too many files/.test(err.message || '')) {
+          return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: err.message } });
+        }
+        next(err);
+      }
+    }
+  );
+
+  // 올린 사진을 돌려준다. 로그인한 같은 기관만 볼 수 있다 — 대상자 댁 사진이다.
+  router.get('/files/care-logs/:id/:name', async (req, res, next) => {
+    try {
+      const { id, name } = req.params;
+      if (!/^[a-f0-9]{24}\.(jpg|png|heic|heif|webp)$/.test(name)) {
+        return res.status(404).end();
+      }
+      const repos = container.repos(req);
+      const log = await repos.careLogRepo.getCareLogById(repos.ownerId, id, restrictOf(repos));
+      if (!log) return res.status(404).end();
+      const file = path.join(UPLOAD_DIR, 'care-logs', id, name);
+      return res.sendFile(file, (err) => {
+        if (err && !res.headersSent) res.status(404).end();
+      });
+    } catch (err) {
       next(err);
     }
   });

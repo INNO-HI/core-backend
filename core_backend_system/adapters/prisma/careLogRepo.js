@@ -327,6 +327,21 @@ class PrismaCareLogRepo {
               ? null
               : Number(payload.elapsedSeconds),
           careContent: payload.careContent ?? null,
+          // 앱이 결과지에서 정책하이 추천을 받았으면 함께 남긴다.
+          // 안 남기면 대시보드가 "추천 정책" 칸을 그리지 못한다 —
+          // 앱 화면에는 있었는데 기관에는 없는 셈이 된다.
+          recommendedPolicies: Array.isArray(payload.recommendedPolicies)
+            ? payload.recommendedPolicies.slice(0, 10).map((p) => ({
+                id: String(p.id || ''),
+                name: String(p.name || p.title || ''),
+                organization: String(p.organization || p.ministry || p.region || ''),
+                schedule: String(p.schedule || p.contact || ''),
+                reason: p.reason ? String(p.reason).slice(0, 300) : undefined,
+                url: p.url ? String(p.url) : undefined,
+                category: p.category ? String(p.category) : undefined,
+                matchPoints: Array.isArray(p.matchPoints) ? p.matchPoints.map(String).slice(0, 6) : undefined,
+              }))
+            : undefined,
           confirmedById: authorUserId,
           confirmedAt: new Date(),
         },
